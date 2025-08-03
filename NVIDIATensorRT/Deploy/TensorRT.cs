@@ -6,8 +6,15 @@ using System.Buffers;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Linq;
+using System.Text;
+using System.Threading.Tasks;
+using NVIDIATensorRT;
+using NVIDIATensorRT.Custom;
+using System.Text.RegularExpressions;
+using System.Collections;
 using System.Runtime.CompilerServices;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
@@ -118,6 +125,8 @@ namespace NVIDIATensorRT.Deploy
         /// <param name="output">输出张量维度结构体</param>
         public void Tensor(string inputstring, string outputstring, ref InputTensor input, ref OutputTensor output)
         {
+            input = new InputTensor();
+            output = new OutputTensor();
             Dims InputDims = NVIDIAPredictor.GetBindingDimensions(inputstring);
             input.BatchSize = InputDims.d[0];
             input.Channels = InputDims.d[1];
@@ -212,13 +221,14 @@ namespace NVIDIATensorRT.Deploy
         /// <summary>
         /// 执行批量推理（GPU内存访问）
         /// </summary>
-        /// <param name="inputtensor">输入张量信息</param>   
+        /// <param name="inputtensor">输入张量信息</param>
         /// <param name="outputtensor">输出张量信息</param>
         /// <param name="values">输入图像的列表，每个元素为一张图像</param>
         public IntPtr InFerencePtr(ref InputTensor inputtensor, ref OutputTensor outputtensor, List<Mat> values)
         {
             if (NVIDIAPredictor == null)
                 throw new Exception("NVIDIAPredictor初始化失败！");
+            List<Mat> values = new List<Mat> { mat };
             Stopwatch totalWatch = Stopwatch.StartNew();
             Stopwatch sw = Stopwatch.StartNew();
             var intptr = ProcessBatch(ref inputtensor, values);
@@ -326,15 +336,16 @@ namespace NVIDIATensorRT.Deploy
         /// <exception cref="ArgumentNullException">当 output==null 时抛出</exception>
         /// <exception cref="ArgumentException">当 batch size!=1 或通道数异常时抛出</exception>
         public unsafe List<DetectionResult> ParseYoloOutput(
-        float* output,
-        InputTensor inshape,
-        OutputTensor outshape,
-        OpenCvSharp.Size originalSize,
-        string yamlpath,
+    float* output,
+    InputTensor inshape,
+    OutputTensor outshape,
+    OpenCvSharp.Size originalSize,
+    string yamlpath,
         float confidenceThreshold = 0.3f,
         float iouThreshold = 0.3f)
         {
             if (output == null) throw new ArgumentNullException(nameof(output), "输出数据不能为空！");
+            if (outshape.BatchSize != 1) throw new ArgumentException($"预期的批次大小为 1，实际为 {outshape.BatchSize}！");
             int channels = outshape.Channels;
             int numDetections = outshape.NumDetections;
             if (channels < 5) throw new ArgumentException($"通道大小错误：{channels}！");

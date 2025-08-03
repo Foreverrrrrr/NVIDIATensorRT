@@ -64,4 +64,5 @@ namespace NVIDIATensorRT.Internal
             throw new TRTException(ExceptionStatus.OccurredCuda, Marshal.PtrToStringAnsi(NativeMethods.trt_get_last_err_msg()));
         }
     }
+
 }

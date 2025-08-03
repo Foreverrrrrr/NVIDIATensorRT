@@ -1,8 +1,14 @@
 ﻿using NVIDIATensorRT.Deploy;
 using NVIDIATensorRT.Internal;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
+using System.Runtime.InteropServices;
 using System.Text;
+using System.Threading.Tasks;
+using NVIDIATensorRT.Internal;
+using OpenCvSharp;
 
 namespace NVIDIATensorRT.Custom
 {
@@ -220,7 +226,10 @@ namespace NVIDIATensorRT.Custom
             int numDetections = output.NumDetections;
             var result = new InferenceTensor(output.MagnitudeTensor);
             sbyte[] nodeNameSbyte = Encoding.UTF8.GetBytes(nodeName + '\0').Select(b => (sbyte)b).ToArray();
+            int dimLength = 0;
+            int[] dimsArray = new int[8];
             fixed (sbyte* namePtr = nodeNameSbyte)
+            fixed (int* dimsPtr = dimsArray)
             {
                 HandleException.Handler(NativeMethods.copyFloatDeviceToHostByName(
                     ptr,
@@ -229,7 +238,7 @@ namespace NVIDIATensorRT.Custom
                     (UIntPtr)output.MagnitudeTensor));
             }
             return result;
-        }
+            }
 
         public unsafe IntPtr GetZeroCopyResult(ref OutputTensor output, string nodeName)
         {

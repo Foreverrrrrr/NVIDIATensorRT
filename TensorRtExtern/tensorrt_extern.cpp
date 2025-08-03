@@ -21,8 +21,8 @@ std::mutex g_deviceToHostMemoryPoolMutex;
 // @param type 输出模型精度，
 ExceptionStatus onnxToEngine(const char* onnxFile, int memorySize) {
 	BEGIN_WRAP_TRTAPI
-		// 将路径作为参数传递给函数
-		std::string path(onnxFile);
+	// 将路径作为参数传递给函数
+	std::string path(onnxFile);
 	std::string::size_type iPos = (path.find_last_of('\\') + 1) == 0 ? path.find_last_of('/') + 1 : path.find_last_of('\\') + 1;
 	std::string modelPath = path.substr(0, iPos);//获取文件路径
 	std::string modelName = path.substr(iPos, path.length() - iPos);//获取带后缀的文件名
@@ -81,7 +81,7 @@ ExceptionStatus onnxToEngine(const char* onnxFile, int memorySize) {
 }
 
 ExceptionStatus onnxToEngineDynamicShape(const char* onnxFile, int memorySize, const char* nodeName,
-	int* minShapes, int* optShapes, int* maxShapes)
+	int* minShapes, int* optShapes, int* maxShapes) 
 {
 	BEGIN_WRAP_TRTAPI
 		// 将路径作为参数传递给函数
@@ -156,8 +156,8 @@ ExceptionStatus onnxToEngineDynamicShape(const char* onnxFile, int memorySize, c
 ExceptionStatus nvinferInit(const char* engineFile, NvinferStruct** ptr) {
 	BEGIN_WRAP_TRTAPI
 		initLibNvInferPlugins(nullptr, "");
-		// 以二进制方式读取问价
-		std::ifstream filePtr(engineFile, std::ios::binary);
+	// 以二进制方式读取问价
+	std::ifstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr.good()) {
 		std::cerr << "文件无法打开，请确定文件是否可用！" << std::endl;
 		dup_last_err_msg("Model file reading error, please confirm if the file exists or if the format is correct.");
@@ -187,6 +187,7 @@ ExceptionStatus nvinferInit(const char* engineFile, NvinferStruct** ptr) {
 	// 创建gpu数据缓冲区
 	p->dataBuffer = new void* [numNode];
 	delete[] modelStream;
+
 	for (int i = 0; i < numNode; i++) {
 		CHECKTRT(nvinfer1::Dims dims = p->engine->getBindingDimensions(i));
 		CHECKTRT(nvinfer1::DataType type = p->engine->getBindingDataType(i));
@@ -265,7 +266,7 @@ ExceptionStatus nvinferInitDynamicShape(const char* engineFile, int maxBatahSize
 ExceptionStatus copyFloatHostToDeviceByName(NvinferStruct* ptr, const char* nodeName, float* data)
 {
 	BEGIN_WRAP_TRTAPI
-		CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
+	CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
 	// 获取输入节点未读信息
 	CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
@@ -321,8 +322,8 @@ ExceptionStatus copyFloatHostToDeviceByNameZeroCopy(
 ExceptionStatus copyFloatHostToDeviceByIndex(NvinferStruct* ptr, int nodeIndex, float* data)
 {
 	BEGIN_WRAP_TRTAPI
-		// 获取输入节点未读信息
-		CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
+	// 获取输入节点未读信息
+	CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
 	size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
 	CHECKCUDA(cudaMemcpyAsync(ptr->dataBuffer[nodeIndex], data, size * sizeof(float), cudaMemcpyHostToDevice, ptr->stream));
@@ -333,16 +334,16 @@ ExceptionStatus setBindingDimensionsByName(NvinferStruct* ptr, const char* nodeN
 	CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
 	switch (nbDims)
 	{
-	case 2:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims2(dims[0], dims[1])));
-		break;
-	case 3:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims3(dims[0], dims[1], dims[2])));
-		break;
-	case 4:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims4(dims[0], dims[1], dims[2], dims[3])));
-		break;
-	default:break;
+		case 2:
+			CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims2(dims[0], dims[1])));
+			break;
+		case 3:
+			CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims3(dims[0], dims[1], dims[2])));
+			break;
+		case 4:
+			CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims4(dims[0], dims[1], dims[2], dims[3])));
+			break;
+		default:break;
 	}
 	END_WRAP_TRTAPI
 }
@@ -350,16 +351,16 @@ ExceptionStatus setBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, i
 {
 	switch (nbDims)
 	{
-	case 2:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims2(dims[0], dims[1])));
-		break;
-	case 3:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims3(dims[0], dims[1], dims[2])));
-		break;
-	case 4:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims4(dims[0], dims[1], dims[2], dims[3])));
-		break;
-	default:break;
+		case 2:
+			CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims2(dims[0], dims[1])));
+			break;
+		case 3:
+			CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims3(dims[0], dims[1], dims[2])));
+			break;
+		case 4:
+			CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims4(dims[0], dims[1], dims[2], dims[3])));
+			break;
+		default:break;
 	}
 	END_WRAP_TRTAPI
 }
@@ -367,7 +368,7 @@ ExceptionStatus setBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, i
 ExceptionStatus tensorRtInfer(NvinferStruct* ptr)
 {
 	BEGIN_WRAP_TRTAPI
-		CHECKTRT(ptr->context->enqueueV2((void**)ptr->dataBuffer, ptr->stream, nullptr));
+	CHECKTRT(ptr->context->enqueueV2((void**)ptr->dataBuffer, ptr->stream, nullptr));
 	END_WRAP_TRTAPI
 }
 
@@ -412,7 +413,7 @@ ExceptionStatus copyFloatDeviceToHostZeroCopy(
 {
 	BEGIN_WRAP_TRTAPI
 		try {
-		CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
+	CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
 		size_t byteSize = elementCount * sizeof(float);
 		void* pinnedMem = nullptr;
 		{
@@ -436,7 +437,7 @@ ExceptionStatus copyFloatDeviceToHostZeroCopy(
 		__pipeline_wait_prior(0);
 #else
 		CHECKCUDA(cudaMemcpyAsync(pinnedMem, devicePtr, byteSize, cudaMemcpyDeviceToHost, ptr->stream));
-		CHECKCUDA(cudaStreamSynchronize(ptr->stream));
+	CHECKCUDA(cudaStreamSynchronize(ptr->stream));
 #endif
 		* hostData = static_cast<float*>(pinnedMem);
 	}
@@ -477,8 +478,8 @@ void cleanupAllPinnedMemoryPools()
 ExceptionStatus copyFloatDeviceToHostByIndex(NvinferStruct* ptr, int nodeIndex, float* data)
 {
 	BEGIN_WRAP_TRTAPI
-		// 获取输入节点未读信息
-		CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
+	// 获取输入节点未读信息
+	CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
 	size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
 	CHECKCUDA(cudaMemcpyAsync(data, ptr->dataBuffer[nodeIndex], size * sizeof(float), cudaMemcpyDeviceToHost, ptr->stream));
@@ -489,18 +490,18 @@ ExceptionStatus copyFloatDeviceToHostByIndex(NvinferStruct* ptr, int nodeIndex, 
 ExceptionStatus nvinferDelete(NvinferStruct* ptr)
 {
 	BEGIN_WRAP_TRTAPI
-		CHECKTRT(int numNode = ptr->engine->getNbBindings());
-	for (int i = 0; i < numNode; ++i)
+	CHECKTRT(int numNode = ptr->engine->getNbBindings());
+	for (int i = 0; i < numNode; ++i) 
 	{
 		CHECKCUDA(cudaFree(ptr->dataBuffer[i]);)
-			ptr->dataBuffer[i] = nullptr;
+		ptr->dataBuffer[i] = nullptr;
 	}
 	delete ptr->dataBuffer;
 	ptr->dataBuffer = nullptr;
 	CHECKTRT(ptr->context->destroy();)
-		CHECKTRT(ptr->engine->destroy();)
-		CHECKTRT(ptr->runtime->destroy();)
-		CHECKCUDA(cudaStreamDestroy(ptr->stream));
+	CHECKTRT(ptr->engine->destroy();)
+	CHECKTRT(ptr->runtime->destroy();)
+	CHECKCUDA(cudaStreamDestroy(ptr->stream));
 	delete ptr;
 	END_WRAP_TRTAPI
 }
@@ -508,7 +509,7 @@ ExceptionStatus nvinferDelete(NvinferStruct* ptr)
 ExceptionStatus getBindingDimensionsByName(NvinferStruct* ptr, const char* nodeName, int* dimLength, int* dims)
 {
 	BEGIN_WRAP_TRTAPI
-		CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
+	CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
 	// 获取输入节点未读信息
 	CHECKTRT(nvinfer1::Dims shape_d = ptr->context->getBindingDimensions(nodeIndex));
 	*dimLength = shape_d.nbDims;
@@ -522,8 +523,8 @@ ExceptionStatus getBindingDimensionsByName(NvinferStruct* ptr, const char* nodeN
 ExceptionStatus getBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, int* dimLength, int* dims)
 {
 	BEGIN_WRAP_TRTAPI
-		// 获取输入节点未读信息
-		CHECKTRT(nvinfer1::Dims shape_d = ptr->context->getBindingDimensions(nodeIndex));
+	// 获取输入节点未读信息
+	CHECKTRT(nvinfer1::Dims shape_d = ptr->context->getBindingDimensions(nodeIndex));
 	*dimLength = shape_d.nbDims;
 	for (int i = 0; i < *dimLength; ++i)
 	{
