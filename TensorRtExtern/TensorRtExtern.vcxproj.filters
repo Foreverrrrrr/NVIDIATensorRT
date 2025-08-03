@@ -30,9 +30,6 @@
     <ClInclude Include="tensorrt_extern.h">
       <Filter>头文件\custom_method</Filter>
     </ClInclude>
-    <ClInclude Include="logger.h">
-      <Filter>头文件\common</Filter>
-    </ClInclude>
     <ClInclude Include="logging.h">
       <Filter>头文件\common</Filter>
     </ClInclude>
@@ -43,6 +40,9 @@
       <Filter>头文件\common</Filter>
     </ClInclude>
     <ClInclude Include="exception_status.h">
+      <Filter>头文件\common</Filter>
+    </ClInclude>
+    <ClInclude Include="logger.h">
       <Filter>头文件\common</Filter>
     </ClInclude>
   </ItemGroup>

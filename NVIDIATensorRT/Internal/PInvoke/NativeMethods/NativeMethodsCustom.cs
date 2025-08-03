@@ -46,5 +46,23 @@ namespace NVIDIATensorRT.Internal
         public static extern void cleanupDeviceToHostPinnedMemoryPool();
         [DllImport(tensorrt_dll_path, CallingConvention = CallingConvention.Cdecl)]
         public static extern void cleanupHostToDevicePinnedMemoryPool();
+
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate void CopyCompleteCallback(IntPtr hostData, IntPtr userData, double elapsedMs);
+
+        [DllImport(tensorrt_dll_path, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Ansi)]
+        public static extern ExceptionStatus copyFloatDeviceToHostAsync(
+            IntPtr nvinferPtr,
+            string nodeName,
+            UIntPtr elementCount,
+            CopyCompleteCallback callback,
+            IntPtr userData
+        );
+        // @brief 释放映射的主机内存
+        [DllImport(tensorrt_dll_path, CallingConvention = CallingConvention.Cdecl)]
+        public static extern ExceptionStatus freeMappedHostMemory(IntPtr mappedPtr);
+
+        [DllImport(tensorrt_dll_path, CallingConvention = CallingConvention.Cdecl)]
+        public static extern void enableDetailedTiming(bool enable);
     }
 }

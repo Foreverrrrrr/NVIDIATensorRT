@@ -1,8 +1,12 @@
 ﻿using NVIDIATensorRT.Deploy;
 using NVIDIATensorRT.Internal;
+using OpenCvSharp;
 using System;
+using System.Collections.Generic;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
+using static NVIDIATensorRT.Internal.NativeMethods;
 
 namespace NVIDIATensorRT.Custom
 {
@@ -11,6 +15,8 @@ namespace NVIDIATensorRT.Custom
     /// </summary>
     public class Nvinfer : DisposableTrtObject
     {
+        public unsafe delegate void CopyReasoningBack(OutputTensor tensor, Mat image, float* hostData, double elapsedMs);
+
         private readonly object _syncLock = new object();
 
         /// <summary>
@@ -67,6 +73,10 @@ namespace NVIDIATensorRT.Custom
         {
             sbyte[] modelPathSbyte = (sbyte[])((Array)System.Text.Encoding.UTF8.GetBytes(modelPath));
             HandleException.Handler(NativeMethods.nvinferInitDynamicShape(ref modelPathSbyte[0], maxBatahSize, out ptr));
+        }
+        public void SetDebug(bool enable)
+        {
+            NativeMethods.enableDetailedTiming(enable);
         }
 
         /// <summary>
@@ -220,7 +230,10 @@ namespace NVIDIATensorRT.Custom
             int numDetections = output.NumDetections;
             var result = new InferenceTensor(output.MagnitudeTensor);
             sbyte[] nodeNameSbyte = Encoding.UTF8.GetBytes(nodeName + '\0').Select(b => (sbyte)b).ToArray();
+            int dimLength = 0;
+            int[] dimsArray = new int[8];
             fixed (sbyte* namePtr = nodeNameSbyte)
+            fixed (int* dimsPtr = dimsArray)
             {
                 HandleException.Handler(NativeMethods.copyFloatDeviceToHostByName(
                     ptr,
@@ -248,6 +261,46 @@ namespace NVIDIATensorRT.Custom
                 (UIntPtr)output.MagnitudeTensor);
             HandleException.Handler(status);
             return hostPtr;
+        }
+
+        /// <summary>
+        /// 异步拷贝结果，通过回调返回
+        /// </summary>
+        public unsafe void GetAsyncResult(string nodeName, OutputTensor output, Mat image, CopyReasoningBack reasoning, object context)
+        {
+            if (reasoning == null)
+                throw new ArgumentNullException(nameof(reasoning));
+            var ctx = new CallbackContext
+            {
+                Tensor = output,
+                Image = image,
+                ManagedCallback = reasoning
+            };
+            ctx.Handle = GCHandle.Alloc(ctx, GCHandleType.Normal);
+            IntPtr userData = GCHandle.ToIntPtr(ctx.Handle);
+            CopyCompleteCallback nativeCb = (hostData, Data, elapsedMs) =>
+            {
+                var handle = GCHandle.FromIntPtr(Data);
+                var cbCtx = (CallbackContext)handle.Target;
+                try
+                {
+                    cbCtx.ManagedCallback(cbCtx.Tensor, cbCtx.Image, (float*)hostData, elapsedMs);
+                }
+                finally
+                {
+                    cbCtx.Handle.Free();
+                    image.Dispose();
+                }
+            };
+            ExceptionStatus status = NativeMethods.copyFloatDeviceToHostAsync(
+                ptr,
+                nodeName,
+                (UIntPtr)output.MagnitudeTensor,
+                nativeCb,
+                userData
+            );
+
+            HandleException.Handler(status);
         }
 
         /// <summary>

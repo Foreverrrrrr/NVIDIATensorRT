@@ -27,6 +27,7 @@
 #include <ostream>
 #include <sstream>
 #include <string>
+#include <NvOnnxParser.h>
 
 namespace sample
 {

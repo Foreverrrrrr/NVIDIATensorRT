@@ -16,9 +16,15 @@
 #include "logging.h"
 #include "logger.h"
 
+// ========== 性能计时控制 ==========
+// 全局变量，控制是否启用详细计时
+extern bool g_enableDetailedTiming;
 
+// @brief 启用详细计时模式
+TRTAPI(void) enableDetailedTiming(bool enable);
 
-
+// @brief 获取当前计时模式状态
+TRTAPI(bool) isDetailedTimingEnabled();
 
 // @brief 推理核心结构体
 typedef struct tensorRT_nvinfer {
@@ -34,6 +40,10 @@ typedef struct tensorRT_nvinfer {
 	nvinfer1::IExecutionContext* context;
 	// GPU显存输入/输出缓冲
 	void** dataBuffer;
+	// 张量名称数组（新增）
+	char** tensorNames;
+	// 张量数量（新增）
+	int32_t numTensors;
 	cudaStream_t stream;
 } NvinferStruct;
 
@@ -68,6 +78,12 @@ TRTAPI(void) cleanupAllPinnedMemoryPools();
 TRTAPI(void) cleanupDeviceToHostPinnedMemoryPool();
 TRTAPI(void) cleanupHostToDevicePinnedMemoryPool();
 
+// @brief 释放特定大小的设备到主机固定内存（可选优化）
+TRTAPI(void) releaseDeviceToHostPinnedMemory(size_t byteSize);
+
+// @brief 获取内存池状态信息
+TRTAPI(void) getDeviceToHostMemoryPoolInfo(int* poolSize, size_t* totalMemoryBytes);
+
 // @brief 通过指定节点编号，将设备上的数据拷贝到内存上
 TRTAPI(ExceptionStatus) copyFloatDeviceToHostByIndex(NvinferStruct* ptr, int nodeIndex, float* data);
 
@@ -80,7 +96,36 @@ TRTAPI(ExceptionStatus) getBindingDimensionsByName(NvinferStruct* ptr, const cha
 // @brief 通过节点编号获取绑定节点的形状信息
 TRTAPI(ExceptionStatus) getBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, int* dimLength, int* dims);
 
+// ========== 新增的TensorRT 10.11兼容函数 ==========
+// @brief 获取张量数量
+TRTAPI(int32_t) getTensorCount(NvinferStruct* ptr);
 
+// @brief 获取指定索引的张量名称
+TRTAPI(const char*) getTensorNameByIndex(NvinferStruct* ptr, int32_t index);
+
+// @brief 检查张量是否为输入张量
+TRTAPI(bool) isTensorInput(NvinferStruct* ptr, const char* tensorName);
+
+// @brief 检查张量是否为输出张量
+TRTAPI(bool) isTensorOutput(NvinferStruct* ptr, const char* tensorName);
+
+
+// ========== 新增部分 ==========
+// @brief C 回调函数定义（给 C# 注册用）
+// hostData: 指向Pinned Host内存 (已拷贝完成的数据)
+// userData: 用户传入的上下文指针（可以在C#中传GCHandle或IntPtr）
+typedef void(*CopyCompleteCallback)(void* hostData, void* userData, double elapsedMs);
+
+TRTAPI(ExceptionStatus) copyFloatDeviceToHostAsync(
+	NvinferStruct* ptr,
+	const char* nodeName,
+	size_t elementCount,
+	CopyCompleteCallback callback,
+	void* userData
+);
+
+// @brief 释放映射的主机内存
+TRTAPI(ExceptionStatus) freeMappedHostMemory(float* mappedPtr);
 #endif // !TENSORRT_EXTERN_H
 
 

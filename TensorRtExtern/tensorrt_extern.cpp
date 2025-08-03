@@ -1,81 +1,87 @@
-#include "tensorrt_extern.h"
+ï»¿#include "tensorrt_extern.h"
 #include <string>
-
+#include <chrono>
+#include <cstring>
+#include <cuda_runtime.h>
+#include <cuda_runtime.h>
 #include "ErrorRecorder.h"
 #include "NvInferPlugin.h"          
 #include "NvInferPluginUtils.h"  
 #include "common.h"
 #include <unordered_map>
+#include <mutex>
+#include <thread>
 
-// Ö÷»úµ½Éè±¸µÄÁã¿½±´ÄÚ´æ³Ø
+bool g_enableDetailedTiming = false; 
+
+// å¯ç”¨/ç¦ç”¨è¯¦ç»†è®¡æ—¶æ¨¡å¼
+void enableDetailedTiming(bool enable) {
+	g_enableDetailedTiming = enable;
+	std::cout << "[CONFIG] è¯¦ç»†è®¡æ—¶æ¨¡å¼: " << (enable ? "å¯ç”¨" : "ç¦ç”¨") << std::endl;
+}
+
+// è·å–å½“å‰è®¡æ—¶æ¨¡å¼çŠ¶æ€
+bool isDetailedTimingEnabled() {
+	return g_enableDetailedTiming;
+}
+#define TIMING_LOG(message) if (g_enableDetailedTiming) { std::cout << message << std::endl; }
+#define TIMING_LOG_STREAM(stream) if (g_enableDetailedTiming) { std::cout << stream << std::endl; }
+
+// ä¸»æœºåˆ°è®¾å¤‡çš„é›¶æ‹·è´å†…å­˜æ± 
 std::unordered_map<size_t, void*> g_hostToDevicePinnedMemoryPool;
 std::mutex g_hostToDeviceMemoryPoolMutex;
 
-// Éè±¸µ½Ö÷»úµÄÁã¿½±´ÄÚ´æ³Ø
+// è®¾å¤‡åˆ°ä¸»æœºçš„é›¶æ‹·è´å†…å­˜æ± 
 std::unordered_map<size_t, void*> g_deviceToHostPinnedMemoryPool;
 std::mutex g_deviceToHostMemoryPoolMutex;
 
-// @brief ½«±¾µØonnxÄ£ĞÍ×ªÎªtensorrtÖĞµÄengine¸ñÊ½£¬²¢±£´æµ½±¾µØ
-// @param onnx_file_path_wchar onnxÄ£ĞÍ±¾µØµØÖ·
-// @param engine_file_path_wchar engineÄ£ĞÍ±¾µØµØÖ·
-// @param type Êä³öÄ£ĞÍ¾«¶È£¬
+// è¾…åŠ©å‡½æ•°ï¼šæŸ¥æ‰¾å¼ é‡ç´¢å¼•
+int32_t findTensorIndex(NvinferStruct* ptr, const char* nodeName) {
+	for (int32_t i = 0; i < ptr->numTensors; i++) {
+		if (strcmp(ptr->tensorNames[i], nodeName) == 0) {
+			return i;
+		}
+	}
+	return -1;
+}
+
+// @brief å°†æœ¬åœ°onnxæ¨¡å‹è½¬ä¸ºtensorrtä¸­çš„engineæ ¼å¼ï¼Œå¹¶ä¿å­˜åˆ°æœ¬åœ°
+// @param onnx_file_path_wchar onnxæ¨¡å‹æœ¬åœ°åœ°å€
+// @param engine_file_path_wchar engineæ¨¡å‹æœ¬åœ°åœ°å€
+// @param type è¾“å‡ºæ¨¡å‹ç²¾åº¦ï¼Œ
 ExceptionStatus onnxToEngine(const char* onnxFile, int memorySize) {
 	BEGIN_WRAP_TRTAPI
-		// ½«Â·¾¶×÷Îª²ÎÊı´«µİ¸øº¯Êı
 		std::string path(onnxFile);
 	std::string::size_type iPos = (path.find_last_of('\\') + 1) == 0 ? path.find_last_of('/') + 1 : path.find_last_of('\\') + 1;
-	std::string modelPath = path.substr(0, iPos);//»ñÈ¡ÎÄ¼şÂ·¾¶
-	std::string modelName = path.substr(iPos, path.length() - iPos);//»ñÈ¡´øºó×ºµÄÎÄ¼şÃû
-	std::string modelName_ = modelName.substr(0, modelName.rfind("."));//»ñÈ¡²»´øºó×ºµÄÎÄ¼şÃûÃû
+	std::string modelPath = path.substr(0, iPos);//è·å–æ–‡ä»¶è·¯å¾„
+	std::string modelName = path.substr(iPos, path.length() - iPos);//è·å–å¸¦åç¼€çš„æ–‡ä»¶å
+	std::string modelName_ = modelName.substr(0, modelName.rfind("."));//è·å–ä¸å¸¦åç¼€çš„æ–‡ä»¶åå
 	std::string engineFile = modelPath + modelName_ + ".engine";
-	//std::cout << model_name << std::endl;
-	//std::cout << model_name_ << std::endl;
-	//std::cout << model_path << std::endl;
-	//std::cout << engine_file << std::endl;
-
-	// ¹¹½¨Æ÷£¬»ñÈ¡cudaÄÚºËÄ¿Â¼ÒÔ»ñÈ¡×î¿ìµÄÊµÏÖ
-	// ÓÃÓÚ´´½¨config¡¢network¡¢engineµÄÆäËû¶ÔÏóµÄºËĞÄÀà
 	nvinfer1::IBuilder* builder = nvinfer1::createInferBuilder(sample::gLogger.getTRTLogger());
-	// ¶¨ÒåÍøÂçÊôĞÔ
 	const auto explicitBatch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-	// ½âÎöonnxÍøÂçÎÄ¼ş
-	// tensorRTÄ£ĞÍÀà
 	nvinfer1::INetworkDefinition* network = builder->createNetworkV2(explicitBatch);
-	// onnxÎÄ¼ş½âÎöÀà
-	// ½«onnxÎÄ¼ş½âÎö£¬²¢Ìî³ärensorRTÍøÂç½á¹¹
 	nvonnxparser::IParser* parser = nvonnxparser::createParser(*network, sample::gLogger.getTRTLogger());
-	// ½âÎöonnxÎÄ¼ş
 	parser->parseFromFile(onnxFile, 2);
 	for (int i = 0; i < parser->getNbErrors(); ++i) {
 		std::cout << "load error: " << parser->getError(i)->desc() << std::endl;
 	}
 	printf("tensorRT load mask onnx model successfully!!!...\n");
-
-	// ´´½¨ÍÆÀíÒıÇæ
-	// ´´½¨Éú³ÉÆ÷ÅäÖÃ¶ÔÏó¡£
 	nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
-	// ÉèÖÃ×î´ó¹¤×÷¿Õ¼ä´óĞ¡¡£
-	config->setMaxWorkspaceSize(1024 * 1024 * memorySize);
-	// ÉèÖÃÄ£ĞÍÊä³ö¾«¶È
+	config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 1024 * 1024 * memorySize);
 	config->setFlag(nvinfer1::BuilderFlag::kFP16);
-	// ´´½¨ÍÆÀíÒıÇæ
 	nvinfer1::ICudaEngine* engine = builder->buildEngineWithConfig(*network, *config);
-	// ½«ÍÆÀíÒøÇ¹±£´æµ½±¾µØ
 	std::cout << "try to save engine file now~~~" << std::endl;
 	std::ofstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr) {
 		std::cerr << "could not open plan output file" << std::endl;
 		return ExceptionStatus::Occurred;
 	}
-	// ½«Ä£ĞÍ×ª»¯ÎªÎÄ¼şÁ÷Êı¾İ
 	nvinfer1::IHostMemory* modelStream = engine->serialize();
-	// ½«ÎÄ¼ş±£´æµ½±¾µØ
 	filePtr.write(reinterpret_cast<const char*>(modelStream->data()), modelStream->size());
-	// Ïú»Ù´´½¨µÄ¶ÔÏó
-	modelStream->destroy();
-	engine->destroy();
-	network->destroy();
-	parser->destroy();
+	delete modelStream;
+	delete engine;
+	delete network;
+	delete parser;
 	std::cout << "convert onnx model to TensorRT engine model successfully!" << std::endl;
 	END_WRAP_TRTAPI
 }
@@ -84,71 +90,45 @@ ExceptionStatus onnxToEngineDynamicShape(const char* onnxFile, int memorySize, c
 	int* minShapes, int* optShapes, int* maxShapes)
 {
 	BEGIN_WRAP_TRTAPI
-		// ½«Â·¾¶×÷Îª²ÎÊı´«µİ¸øº¯Êı
 		std::string path(onnxFile);
 	std::string::size_type iPos = (path.find_last_of('\\') + 1) == 0 ? path.find_last_of('/') + 1 : path.find_last_of('\\') + 1;
-	std::string modelPath = path.substr(0, iPos);//»ñÈ¡ÎÄ¼şÂ·¾¶
-	std::string modelName = path.substr(iPos, path.length() - iPos);//»ñÈ¡´øºó×ºµÄÎÄ¼şÃû
-	std::string modelName_ = modelName.substr(0, modelName.rfind("."));//»ñÈ¡²»´øºó×ºµÄÎÄ¼şÃûÃû
+	std::string modelPath = path.substr(0, iPos);//è·å–æ–‡ä»¶è·¯å¾„
+	std::string modelName = path.substr(iPos, path.length() - iPos);//è·å–å¸¦åç¼€çš„æ–‡ä»¶å
+	std::string modelName_ = modelName.substr(0, modelName.rfind("."));//è·å–ä¸å¸¦åç¼€çš„æ–‡ä»¶åå
 	std::string engineFile = modelPath + modelName_ + ".engine";
-	//std::cout << model_name << std::endl;
-	//std::cout << model_name_ << std::endl;
-	//std::cout << model_path << std::endl;
-	//std::cout << engine_file << std::endl;
-
-	// ¹¹½¨Æ÷£¬»ñÈ¡cudaÄÚºËÄ¿Â¼ÒÔ»ñÈ¡×î¿ìµÄÊµÏÖ
-	// ÓÃÓÚ´´½¨config¡¢network¡¢engineµÄÆäËû¶ÔÏóµÄºËĞÄÀà
 	nvinfer1::IBuilder* builder = nvinfer1::createInferBuilder(sample::gLogger.getTRTLogger());
-	// ¶¨ÒåÍøÂçÊôĞÔ
+	// å®šä¹‰ç½‘ç»œå±æ€§
 	const auto explicitBatch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-	// ½âÎöonnxÍøÂçÎÄ¼ş
-	// tensorRTÄ£ĞÍÀà
 	nvinfer1::INetworkDefinition* network = builder->createNetworkV2(explicitBatch);
-
-	// ´´½¨ÍÆÀíÒıÇæ
-	// ´´½¨Éú³ÉÆ÷ÅäÖÃ¶ÔÏó¡£
 	nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
-	// ÉèÖÃ×î´ó¹¤×÷¿Õ¼ä´óĞ¡¡£
-	config->setMaxWorkspaceSize(1024 * 1024 * memorySize);
-	// ÉèÖÃÄ£ĞÍÊä³ö¾«¶È
+	config->setMemoryPoolLimit(nvinfer1::MemoryPoolType::kWORKSPACE, 1024 * 1024 * memorySize);
 	config->setFlag(nvinfer1::BuilderFlag::kFP16);
-
 	nvinfer1::IOptimizationProfile* profile = builder->createOptimizationProfile();
-
 	profile->setDimensions(nodeName, nvinfer1::OptProfileSelector::kMIN, nvinfer1::Dims4(minShapes[0], minShapes[1], minShapes[2], minShapes[3]));
 	profile->setDimensions(nodeName, nvinfer1::OptProfileSelector::kOPT, nvinfer1::Dims4(optShapes[0], optShapes[1], optShapes[2], optShapes[3]));
 	profile->setDimensions(nodeName, nvinfer1::OptProfileSelector::kMAX, nvinfer1::Dims4(maxShapes[0], maxShapes[1], maxShapes[2], maxShapes[3]));
 
 	config->addOptimizationProfile(profile);
-
-	// onnxÎÄ¼ş½âÎöÀà
-	// ½«onnxÎÄ¼ş½âÎö£¬²¢Ìî³ärensorRTÍøÂç½á¹¹
 	nvonnxparser::IParser* parser = nvonnxparser::createParser(*network, sample::gLogger.getTRTLogger());
-	// ½âÎöonnxÎÄ¼ş
 	parser->parseFromFile(onnxFile, 2);
 	for (int i = 0; i < parser->getNbErrors(); ++i) {
 		std::cout << "load error: " << parser->getError(i)->desc() << std::endl;
 	}
 	printf("tensorRT load mask onnx model successfully!!!...\n");
-
-	// ´´½¨ÍÆÀíÒıÇæ
+	// åˆ›å»ºæ¨ç†å¼•æ“
 	nvinfer1::ICudaEngine* engine = builder->buildEngineWithConfig(*network, *config);
-	// ½«ÍÆÀíÒøÇ¹±£´æµ½±¾µØ
 	std::cout << "try to save engine file now~~~" << std::endl;
 	std::ofstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr) {
 		std::cerr << "could not open plan output file" << std::endl;
 		return ExceptionStatus::Occurred;
 	}
-	// ½«Ä£ĞÍ×ª»¯ÎªÎÄ¼şÁ÷Êı¾İ
 	nvinfer1::IHostMemory* modelStream = engine->serialize();
-	// ½«ÎÄ¼ş±£´æµ½±¾µØ
 	filePtr.write(reinterpret_cast<const char*>(modelStream->data()), modelStream->size());
-	// Ïú»Ù´´½¨µÄ¶ÔÏó
-	modelStream->destroy();
-	engine->destroy();
-	network->destroy();
-	parser->destroy();
+	delete modelStream;
+	delete engine;
+	delete network;
+	delete parser;
 	std::cout << "convert onnx model to TensorRT engine model successfully!" << std::endl;
 	END_WRAP_TRTAPI
 }
@@ -156,46 +136,51 @@ ExceptionStatus onnxToEngineDynamicShape(const char* onnxFile, int memorySize, c
 ExceptionStatus nvinferInit(const char* engineFile, NvinferStruct** ptr) {
 	BEGIN_WRAP_TRTAPI
 		initLibNvInferPlugins(nullptr, "");
-		// ÒÔ¶ş½øÖÆ·½Ê½¶ÁÈ¡ÎÊ¼Û
-		std::ifstream filePtr(engineFile, std::ios::binary);
+	// ä»¥äºŒè¿›åˆ¶æ–¹å¼è¯»å–é—®ä»·
+	std::ifstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr.good()) {
-		std::cerr << "ÎÄ¼şÎŞ·¨´ò¿ª£¬ÇëÈ·¶¨ÎÄ¼şÊÇ·ñ¿ÉÓÃ£¡" << std::endl;
+		std::cerr << "æ–‡ä»¶æ— æ³•æ‰“å¼€ï¼Œè¯·ç¡®å®šæ–‡ä»¶æ˜¯å¦å¯ç”¨ï¼" << std::endl;
 		dup_last_err_msg("Model file reading error, please confirm if the file exists or if the format is correct.");
 		return ExceptionStatus::Occurred;
 	}
 
 	size_t size = 0;
-	filePtr.seekg(0, filePtr.end);	// ½«¶ÁÖ¸Õë´ÓÎÄ¼şÄ©Î²¿ªÊ¼ÒÆ¶¯0¸ö×Ö½Ú
-	size = filePtr.tellg();	// ·µ»Ø¶ÁÖ¸ÕëµÄÎ»ÖÃ£¬´ËÊ±¶ÁÖ¸ÕëµÄÎ»ÖÃ¾ÍÊÇÎÄ¼şµÄ×Ö½ÚÊı
-	filePtr.seekg(0, filePtr.beg);	// ½«¶ÁÖ¸Õë´ÓÎÄ¼ş¿ªÍ·¿ªÊ¼ÒÆ¶¯0¸ö×Ö½Ú
+	filePtr.seekg(0, filePtr.end);	// å°†è¯»æŒ‡é’ˆä»æ–‡ä»¶æœ«å°¾å¼€å§‹ç§»åŠ¨0ä¸ªå­—èŠ‚
+	size = filePtr.tellg();	// è¿”å›è¯»æŒ‡é’ˆçš„ä½ç½®ï¼Œæ­¤æ—¶è¯»æŒ‡é’ˆçš„ä½ç½®å°±æ˜¯æ–‡ä»¶çš„å­—èŠ‚æ•°
+	filePtr.seekg(0, filePtr.beg);	// å°†è¯»æŒ‡é’ˆä»æ–‡ä»¶å¼€å¤´å¼€å§‹ç§»åŠ¨0ä¸ªå­—èŠ‚
 	char* modelStream = new char[size];
 	filePtr.read(modelStream, size);
-	// ¹Ø±ÕÎÄ¼ş
 	filePtr.close();
-
-	// ´´½¨ÍÆÀíºËĞÄ½á¹¹Ìå£¬³õÊ¼»¯±äÁ¿
 	NvinferStruct* p = new NvinferStruct();
-	// ³õÊ¼»¯·´ĞòÁĞ»¯ÒıÇæ
 	CHECKTRT(p->runtime = nvinfer1::createInferRuntime(sample::gLogger.getTRTLogger()));
 	CHECKTRT(p->runtime->setErrorRecorder(&gRecorder));
-	// ³õÊ¼»¯ÍÆÀíÒıÇæ
 	CHECKTRT(p->engine = p->runtime->deserializeCudaEngine(modelStream, size));
-	// ´´½¨ÉÏÏÂÎÄ
 	CHECKTRT(p->context = p->engine->createExecutionContext());
 	CHECKCUDA(cudaStreamCreate(&(p->stream)));
-	CHECKTRT(int numNode = p->engine->getNbBindings());
-	// ´´½¨gpuÊı¾İ»º³åÇø
-	p->dataBuffer = new void* [numNode];
+	int32_t numIO = p->engine->getNbIOTensors();
+	p->dataBuffer = new void* [numIO];
+	p->tensorNames = new char* [numIO];
+	p->numTensors = numIO;
 	delete[] modelStream;
-	for (int i = 0; i < numNode; i++) {
-		CHECKTRT(nvinfer1::Dims dims = p->engine->getBindingDimensions(i));
-		CHECKTRT(nvinfer1::DataType type = p->engine->getBindingDataType(i));
-		std::vector<int> shape(dims.d, dims.d + dims.nbDims);
+
+	for (int32_t i = 0; i < numIO; i++) {
+		const char* tensorName = p->engine->getIOTensorName(i);
+		nvinfer1::Dims dims = p->engine->getTensorShape(tensorName);
+		nvinfer1::DataType type = p->engine->getTensorDataType(tensorName);
+
+		size_t nameLen = strlen(tensorName) + 1;
+		p->tensorNames[i] = new char[nameLen];
+#ifdef _WIN32
+		strcpy_s(p->tensorNames[i], nameLen, tensorName);
+#else
+		strcpy(p->tensorNames[i], tensorName);
+#endif
+
 		size_t size = std::accumulate(dims.d, dims.d + dims.nbDims, 1, std::multiplies<size_t>());
 		switch (type)
 		{
 		case nvinfer1::DataType::kINT32:
-		case nvinfer1::DataType::kFLOAT: size *= 4; break;  // Ã÷È·ÎªÀàĞÍ float
+		case nvinfer1::DataType::kFLOAT: size *= 4; break;  // æ˜ç¡®ä¸ºç±»å‹ float
 		case nvinfer1::DataType::kHALF: size *= 2; break;
 		case nvinfer1::DataType::kBOOL:
 		case nvinfer1::DataType::kINT8:
@@ -207,50 +192,53 @@ ExceptionStatus nvinferInit(const char* engineFile, NvinferStruct** ptr) {
 	END_WRAP_TRTAPI
 }
 
-// @brief ¶ÁÈ¡±¾µØengineÄ£ĞÍ£¬²¢³õÊ¼»¯NvinferStruct£¬·ÖÅä»º´æ¿Õ¼ä
+// @brief è¯»å–æœ¬åœ°engineæ¨¡å‹ï¼Œå¹¶åˆå§‹åŒ–NvinferStructï¼Œåˆ†é…ç¼“å­˜ç©ºé—´
 ExceptionStatus nvinferInitDynamicShape(const char* engineFile, int maxBatahSize, NvinferStruct** ptr) {
 	BEGIN_WRAP_TRTAPI
 		initLibNvInferPlugins(nullptr, "");
-		// ÒÔ¶ş½øÖÆ·½Ê½¶ÁÈ¡ÎÊ¼Û
-		std::ifstream filePtr(engineFile, std::ios::binary);
+	// ä»¥äºŒè¿›åˆ¶æ–¹å¼è¯»å–é—®ä»·
+	std::ifstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr.good()) {
-		std::cerr << "ÎÄ¼şÎŞ·¨´ò¿ª£¬ÇëÈ·¶¨ÎÄ¼şÊÇ·ñ¿ÉÓÃ£¡" << std::endl;
+		std::cerr << "æ–‡ä»¶æ— æ³•æ‰“å¼€ï¼Œè¯·ç¡®å®šæ–‡ä»¶æ˜¯å¦å¯ç”¨ï¼" << std::endl;
 		dup_last_err_msg("Model file reading error, please confirm if the file exists or if the format is correct.");
 		return ExceptionStatus::Occurred;
 	}
 
 	size_t size = 0;
-	filePtr.seekg(0, filePtr.end);	// ½«¶ÁÖ¸Õë´ÓÎÄ¼şÄ©Î²¿ªÊ¼ÒÆ¶¯0¸ö×Ö½Ú
-	size = filePtr.tellg();	// ·µ»Ø¶ÁÖ¸ÕëµÄÎ»ÖÃ£¬´ËÊ±¶ÁÖ¸ÕëµÄÎ»ÖÃ¾ÍÊÇÎÄ¼şµÄ×Ö½ÚÊı
-	filePtr.seekg(0, filePtr.beg);	// ½«¶ÁÖ¸Õë´ÓÎÄ¼ş¿ªÍ·¿ªÊ¼ÒÆ¶¯0¸ö×Ö½Ú
+	filePtr.seekg(0, filePtr.end);	// å°†è¯»æŒ‡é’ˆä»æ–‡ä»¶æœ«å°¾å¼€å§‹ç§»åŠ¨0ä¸ªå­—èŠ‚
+	size = filePtr.tellg();	// è¿”å›è¯»æŒ‡é’ˆçš„ä½ç½®ï¼Œæ­¤æ—¶è¯»æŒ‡é’ˆçš„ä½ç½®å°±æ˜¯æ–‡ä»¶çš„å­—èŠ‚æ•°
+	filePtr.seekg(0, filePtr.beg);	// å°†è¯»æŒ‡é’ˆä»æ–‡ä»¶å¼€å¤´å¼€å§‹ç§»åŠ¨0ä¸ªå­—èŠ‚
 	char* modelStream = new char[size];
 	filePtr.read(modelStream, size);
-	// ¹Ø±ÕÎÄ¼ş
 	filePtr.close();
-
-	// ´´½¨ÍÆÀíºËĞÄ½á¹¹Ìå£¬³õÊ¼»¯±äÁ¿
 	NvinferStruct* p = new NvinferStruct();
-	// ³õÊ¼»¯·´ĞòÁĞ»¯ÒıÇæ
 	CHECKTRT(p->runtime = nvinfer1::createInferRuntime(sample::gLogger.getTRTLogger()));
 	CHECKTRT(p->runtime->setErrorRecorder(&gRecorder));
-	// ³õÊ¼»¯ÍÆÀíÒıÇæ
 	CHECKTRT(p->engine = p->runtime->deserializeCudaEngine(modelStream, size));
-	// ´´½¨ÉÏÏÂÎÄ
 	CHECKTRT(p->context = p->engine->createExecutionContext());
 	CHECKCUDA(cudaStreamCreate(&(p->stream)));
-	CHECKTRT(int numNode = p->engine->getNbBindings());
-	// ´´½¨gpuÊı¾İ»º³åÇø
-	p->dataBuffer = new void* [numNode];
+	int32_t numIO = p->engine->getNbIOTensors();
+	p->dataBuffer = new void* [numIO];
+	p->tensorNames = new char* [numIO];
+	p->numTensors = numIO;
 	delete[] modelStream;
+	for (int32_t i = 0; i < numIO; i++) {
+		const char* tensorName = p->engine->getIOTensorName(i);
+		nvinfer1::Dims dims = p->engine->getTensorShape(tensorName);
+		nvinfer1::DataType type = p->engine->getTensorDataType(tensorName);
+		size_t nameLen = strlen(tensorName) + 1;
+		p->tensorNames[i] = new char[nameLen];
+#ifdef _WIN32
+		strcpy_s(p->tensorNames[i], nameLen, tensorName);
+#else
+		strcpy(p->tensorNames[i], tensorName);
+#endif
 
-	for (int i = 0; i < numNode; i++) {
-		CHECKTRT(nvinfer1::Dims dims = p->engine->getBindingDimensions(i));
-		CHECKTRT(nvinfer1::DataType type = p->engine->getBindingDataType(i));
 		size_t size = std::accumulate(dims.d + 1, dims.d + dims.nbDims, 1, std::multiplies<size_t>());
 		switch (type)
 		{
 		case nvinfer1::DataType::kINT32:
-		case nvinfer1::DataType::kFLOAT: size *= 4; break;  // Ã÷È·ÎªÀàĞÍ float
+		case nvinfer1::DataType::kFLOAT: size *= 4; break;  // æ˜ç¡®ä¸ºç±»å‹ float
 		case nvinfer1::DataType::kHALF: size *= 2; break;
 		case nvinfer1::DataType::kBOOL:
 		case nvinfer1::DataType::kINT8:
@@ -265,12 +253,16 @@ ExceptionStatus nvinferInitDynamicShape(const char* engineFile, int maxBatahSize
 ExceptionStatus copyFloatHostToDeviceByName(NvinferStruct* ptr, const char* nodeName, float* data)
 {
 	BEGIN_WRAP_TRTAPI
-		CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
-	// »ñÈ¡ÊäÈë½ÚµãÎ´¶ÁĞÅÏ¢
-	CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
+		int32_t tensorIndex = findTensorIndex(ptr, nodeName);
+	if (tensorIndex < 0) {
+		return ExceptionStatus::OccurredTRT;
+	}
+
+	// è·å–å¼ é‡å½¢çŠ¶ä¿¡æ¯
+	nvinfer1::Dims dims = ptr->context->getTensorShape(nodeName);
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
 	size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
-	CHECKCUDA(cudaMemcpyAsync(ptr->dataBuffer[nodeIndex], data, size * sizeof(float), cudaMemcpyHostToDevice, ptr->stream));
+	CHECKCUDA(cudaMemcpyAsync(ptr->dataBuffer[tensorIndex], data, size * sizeof(float), cudaMemcpyHostToDevice, ptr->stream));
 	END_WRAP_TRTAPI
 }
 
@@ -282,7 +274,11 @@ ExceptionStatus copyFloatHostToDeviceByNameZeroCopy(
 {
 	BEGIN_WRAP_TRTAPI
 		try {
-		CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
+		int32_t tensorIndex = findTensorIndex(ptr, nodeName);
+		if (tensorIndex < 0) {
+			return ExceptionStatus::OccurredTRT;
+		}
+
 		size_t byteSize = elementCount * sizeof(float);
 		void* pinnedMem = nullptr;
 		{
@@ -298,7 +294,7 @@ ExceptionStatus copyFloatHostToDeviceByNameZeroCopy(
 			g_hostToDevicePinnedMemoryPool[byteSize] = pinnedMem;
 		}
 		std::memcpy(pinnedMem, data, byteSize);
-		void* devicePtr = ptr->dataBuffer[nodeIndex];
+		void* devicePtr = ptr->dataBuffer[tensorIndex];
 #if __CUDA_ARCH__ >= 700
 		__pipeline_memcpy_async(devicePtr, pinnedMem, byteSize);
 		__pipeline_commit();
@@ -306,7 +302,7 @@ ExceptionStatus copyFloatHostToDeviceByNameZeroCopy(
 #else
 		CHECKCUDA(cudaMemcpyAsync(devicePtr, pinnedMem, byteSize,
 			cudaMemcpyHostToDevice, ptr->stream));
-		CHECKCUDA(cudaStreamSynchronize(ptr->stream)); // È·±£Êı¾İÒÑ´«Êäµ½Éè±¸
+		CHECKCUDA(cudaStreamSynchronize(ptr->stream)); // ç¡®ä¿æ•°æ®å·²ä¼ è¾“åˆ°è®¾å¤‡
 #endif
 
 	}
@@ -321,8 +317,13 @@ ExceptionStatus copyFloatHostToDeviceByNameZeroCopy(
 ExceptionStatus copyFloatHostToDeviceByIndex(NvinferStruct* ptr, int nodeIndex, float* data)
 {
 	BEGIN_WRAP_TRTAPI
-		// »ñÈ¡ÊäÈë½ÚµãÎ´¶ÁĞÅÏ¢
-		CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
+		if (nodeIndex < 0 || nodeIndex >= ptr->numTensors) {
+			return ExceptionStatus::OccurredTRT;
+		}
+
+	const char* tensorName = ptr->tensorNames[nodeIndex];
+	// è·å–å¼ é‡å½¢çŠ¶ä¿¡æ¯
+	nvinfer1::Dims dims = ptr->context->getTensorShape(tensorName);
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
 	size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
 	CHECKCUDA(cudaMemcpyAsync(ptr->dataBuffer[nodeIndex], data, size * sizeof(float), cudaMemcpyHostToDevice, ptr->stream));
@@ -330,34 +331,40 @@ ExceptionStatus copyFloatHostToDeviceByIndex(NvinferStruct* ptr, int nodeIndex, 
 }
 ExceptionStatus setBindingDimensionsByName(NvinferStruct* ptr, const char* nodeName, int nbDims, int* dims)
 {
-	CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
-	switch (nbDims)
-	{
-	case 2:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims2(dims[0], dims[1])));
-		break;
-	case 3:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims3(dims[0], dims[1], dims[2])));
-		break;
-	case 4:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims4(dims[0], dims[1], dims[2], dims[3])));
-		break;
-	default:break;
-	}
+	BEGIN_WRAP_TRTAPI
+		switch (nbDims)
+		{
+		case 2:
+			CHECKTRT(ptr->context->setInputShape(nodeName, nvinfer1::Dims2(dims[0], dims[1])));
+			break;
+		case 3:
+			CHECKTRT(ptr->context->setInputShape(nodeName, nvinfer1::Dims3(dims[0], dims[1], dims[2])));
+			break;
+		case 4:
+			CHECKTRT(ptr->context->setInputShape(nodeName, nvinfer1::Dims4(dims[0], dims[1], dims[2], dims[3])));
+			break;
+		default:break;
+		}
 	END_WRAP_TRTAPI
 }
 ExceptionStatus setBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, int nbDims, int* dims)
 {
+	BEGIN_WRAP_TRTAPI
+		if (nodeIndex < 0 || nodeIndex >= ptr->numTensors) {
+			return ExceptionStatus::OccurredTRT;
+		}
+
+	const char* tensorName = ptr->tensorNames[nodeIndex];
 	switch (nbDims)
 	{
 	case 2:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims2(dims[0], dims[1])));
+		CHECKTRT(ptr->context->setInputShape(tensorName, nvinfer1::Dims2(dims[0], dims[1])));
 		break;
 	case 3:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims3(dims[0], dims[1], dims[2])));
+		CHECKTRT(ptr->context->setInputShape(tensorName, nvinfer1::Dims3(dims[0], dims[1], dims[2])));
 		break;
 	case 4:
-		CHECKTRT(ptr->context->setBindingDimensions(nodeIndex, nvinfer1::Dims4(dims[0], dims[1], dims[2], dims[3])));
+		CHECKTRT(ptr->context->setInputShape(tensorName, nvinfer1::Dims4(dims[0], dims[1], dims[2], dims[3])));
 		break;
 	default:break;
 	}
@@ -367,12 +374,21 @@ ExceptionStatus setBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, i
 ExceptionStatus tensorRtInfer(NvinferStruct* ptr)
 {
 	BEGIN_WRAP_TRTAPI
-		CHECKTRT(ptr->context->enqueueV2((void**)ptr->dataBuffer, ptr->stream, nullptr));
+		if (!ptr->context->allInputDimensionsSpecified()) {
+			std::cerr << "Not all input dimensions are specified!" << std::endl;
+			return ExceptionStatus::OccurredTRT;
+		}
+	for (int32_t i = 0; i < ptr->numTensors; i++) {
+		const char* tensorName = ptr->tensorNames[i];
+		CHECKTRT(ptr->context->setTensorAddress(tensorName, ptr->dataBuffer[i]));
+	}
+
+	CHECKTRT(ptr->context->enqueueV3(ptr->stream));
 	END_WRAP_TRTAPI
 }
 
 /// <summary>
-/// ÍÆÀíÖ¸ÕëGPUÈ¡Á÷µ½CPU
+/// æ¨ç†æŒ‡é’ˆGPUå–æµåˆ°CPU
 /// </summary>
 /// <param name="ptr"></param>
 /// <param name="nodeName"></param>
@@ -386,11 +402,15 @@ ExceptionStatus copyFloatDeviceToHostByName(
 {
 	BEGIN_WRAP_TRTAPI
 		try {
-		CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
+		int32_t tensorIndex = findTensorIndex(ptr, nodeName);
+		if (tensorIndex < 0) {
+			return ExceptionStatus::OccurredTRT;
+		}
+
 		size_t byteSize = elementCount * sizeof(float);
 		CHECKCUDA(cudaMemcpyAsync(
 			data,
-			ptr->dataBuffer[nodeIndex],
+			ptr->dataBuffer[tensorIndex],
 			byteSize,
 			cudaMemcpyDeviceToHost,
 			ptr->stream));
@@ -403,51 +423,406 @@ ExceptionStatus copyFloatDeviceToHostByName(
 	END_WRAP_TRTAPI
 }
 
-// Áã¿½±´GPUµ½CPUÄÚ´æ°æ±¾
+// ä¿®æ­£åçš„C++ä¼˜åŒ–ç‰ˆæœ¬ - ä½¿ç”¨æ­£ç¡®çš„ExceptionStatusè¿”å›å€¼
+ExceptionStatus WaitForInferenceCompletion(NvinferStruct* ptr, int timeoutMs = 1000)
+{
+	if (!ptr || !ptr->stream) {
+		return ExceptionStatus::NotOccurred;
+	}
+
+	auto start = std::chrono::high_resolution_clock::now();
+
+	while (true) {
+		cudaError_t streamStatus = cudaStreamQuery(ptr->stream);
+		if (streamStatus == cudaSuccess) {
+			TIMING_LOG("[DEBUG] æ¨ç†å®Œæˆç¡®è®¤")
+			return ExceptionStatus::NotOccurred;
+		}
+		else if (streamStatus != cudaErrorNotReady) {
+			TIMING_LOG("[ERROR] æµæŸ¥è¯¢é”™è¯¯: " << cudaGetErrorString(streamStatus));
+			return ExceptionStatus::OccurredCuda;
+		}
+		auto current = std::chrono::high_resolution_clock::now();
+		auto elapsed = std::chrono::duration<double, std::milli>(current - start).count();
+		if (elapsed > timeoutMs) {
+			TIMING_LOG("[WARNING] ç­‰å¾…æ¨ç†å®Œæˆè¶…æ—¶: " << elapsed << "ms");
+			return ExceptionStatus::NotOccurred; // è¶…æ—¶ä½†ç»§ç»­æ‰§è¡Œ
+		}
+
+		std::this_thread::sleep_for(std::chrono::milliseconds(1));
+	}
+}
+
+// è·å–æœ€åçš„å¼‚å¸¸çŠ¶æ€ï¼ˆä¾›C#ç«¯è°ƒç”¨ï¼‰
+ExceptionStatus GetLastExceptionStatus(NvinferStruct* ptr)
+{
+	// æ£€æŸ¥CUDAé”™è¯¯
+	cudaError_t cudaErr = cudaGetLastError();
+	if (cudaErr != cudaSuccess) {
+		TIMING_LOG("[DEBUG] æ£€æµ‹åˆ°CUDAé”™è¯¯: " << cudaGetErrorString(cudaErr));
+		return ExceptionStatus::OccurredCuda;
+	}
+	return ExceptionStatus::NotOccurred;
+}
+
+// ä¿®æ­£åçš„ä¼˜åŒ–ä¼ è¾“æ–¹æ³•
 ExceptionStatus copyFloatDeviceToHostZeroCopy(
 	NvinferStruct* ptr,
 	const char* nodeName,
 	float** hostData,
 	size_t elementCount)
 {
-	BEGIN_WRAP_TRTAPI
-		try {
-		CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
+	try {
+		auto func_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG_STREAM("[TIMING] copyFloatDeviceToHostZeroCopyï¼Œæ•°æ®å¤§å°: "
+			<< (elementCount * sizeof(float) / 1024) << "KB");
+		auto step1_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING] å¼€å§‹ç­‰å¾…æ¨ç†å®Œæˆ...");
+
+		ExceptionStatus waitResult = WaitForInferenceCompletion(ptr, 2000);
+		if (waitResult != ExceptionStatus::NotOccurred) {
+			std::cout << "[ERROR] ç­‰å¾…æ¨ç†å®Œæˆå¤±è´¥ï¼ŒçŠ¶æ€ç : " << static_cast<int>(waitResult) << std::endl;
+			return waitResult;
+		}
+
+		auto step1_end = std::chrono::high_resolution_clock::now();
+		auto step1_time = std::chrono::duration<double, std::milli>(step1_end - step1_start).count();
+		TIMING_LOG_STREAM("[TIMING] æ¨ç†ç­‰å¾…è€—æ—¶ " << step1_time << "ms");
+		auto step2_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING] æŸ¥æ‰¾å¼ é‡ç´¢å¼•...");
+
+		int32_t tensorIndex = findTensorIndex(ptr, nodeName);
+		if (tensorIndex < 0) {
+			std::cerr << "[ERROR] æ— æ•ˆèŠ‚ç‚¹å: " << nodeName << std::endl;
+			return ExceptionStatus::OccurredTRT;
+		}
+
 		size_t byteSize = elementCount * sizeof(float);
+		auto step2_end = std::chrono::high_resolution_clock::now();
+		auto step2_time = std::chrono::duration<double, std::milli>(step2_end - step2_start).count();
+		TIMING_LOG_STREAM("[TIMING] å¼ é‡æŸ¥æ‰¾è€—æ—¶ " << step2_time << "ms (ç´¢å¼•=" << tensorIndex << ")");
+		auto step3_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING] å†…å­˜æ± æŸ¥æ‰¾/åˆ†é…...");
 		void* pinnedMem = nullptr;
+		bool memoryReused = false;
+		auto pool_lookup_start = std::chrono::high_resolution_clock::now();
 		{
 			std::lock_guard<std::mutex> lock(g_deviceToHostMemoryPoolMutex);
 			auto it = g_deviceToHostPinnedMemoryPool.find(byteSize);
 			if (it != g_deviceToHostPinnedMemoryPool.end()) {
 				pinnedMem = it->second;
+				memoryReused = true;
+				TIMING_LOG_STREAM("[TIMING] å†…å­˜æ± å¤ç”¨æˆåŠŸï¼Œå¤§å°: " << (byteSize / 1024) << "KB");
 			}
 		}
-		if (!pinnedMem) {
-			CHECKCUDA(cudaHostAlloc(&pinnedMem, byteSize, cudaHostAllocMapped));
+		auto pool_lookup_end = std::chrono::high_resolution_clock::now();
+		auto pool_lookup_time = std::chrono::duration<double, std::milli>(pool_lookup_end - pool_lookup_start).count();
 
+		auto alloc_start = std::chrono::high_resolution_clock::now();
+		if (!pinnedMem) {
+			TIMING_LOG("[TIMING] å†…å­˜æ± ä¸­æ— åŒ¹é…é¡¹ï¼Œå¼€å§‹åˆ†é…æ–°å†…å­˜...");
+			cudaError_t err = cudaHostAlloc(&pinnedMem, byteSize, cudaHostAllocMapped);
+			if (err != cudaSuccess) {
+				std::cerr << "[ERROR] cudaHostAllocå¤±è´¥: " << cudaGetErrorString(err) << std::endl;
+				return ExceptionStatus::OccurredCuda;
+			}
 			std::lock_guard<std::mutex> lock(g_deviceToHostMemoryPoolMutex);
 			g_deviceToHostPinnedMemoryPool[byteSize] = pinnedMem;
+			TIMING_LOG_STREAM("[TIMING] æ–°å†…å­˜å·²åŠ å…¥æ± ä¸­ï¼Œå¤§å°: " << (byteSize / 1024) << "KB");
 		}
-		// »ñÈ¡Éè±¸Ö¸Õë
-		void* devicePtr = ptr->dataBuffer[nodeIndex];
-#if __CUDA_ARCH__ >= 700
-		__pipeline_memcpy_async(pinnedMem, devicePtr, byteSize);
-		__pipeline_commit();
-		__pipeline_wait_prior(0);
-#else
-		CHECKCUDA(cudaMemcpyAsync(pinnedMem, devicePtr, byteSize, cudaMemcpyDeviceToHost, ptr->stream));
-		CHECKCUDA(cudaStreamSynchronize(ptr->stream));
-#endif
-		* hostData = static_cast<float*>(pinnedMem);
+		auto alloc_end = std::chrono::high_resolution_clock::now();
+		auto alloc_time = std::chrono::duration<double, std::milli>(alloc_end - alloc_start).count();
+
+		auto step3_end = std::chrono::high_resolution_clock::now();
+		auto step3_time = std::chrono::duration<double, std::milli>(step3_end - step3_start).count();
+		TIMING_LOG_STREAM("[TIMING] å†…å­˜æ± æ“ä½œè€—æ—¶ " << step3_time
+			<< "ms (æŸ¥æ‰¾=" << pool_lookup_time << "ms, åˆ†é…=" << alloc_time << "ms, å¤ç”¨="
+			<< (memoryReused ? "æ˜¯" : "å¦") << ")");
+
+		auto step4_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING] å¼€å§‹GPU->ä¸»æœºæ•°æ®ä¼ è¾“...");
+
+		auto memcpy_start = std::chrono::high_resolution_clock::now();
+		cudaError_t err = cudaMemcpyAsync(pinnedMem, ptr->dataBuffer[tensorIndex], byteSize,
+			cudaMemcpyDeviceToHost, ptr->stream);
+		if (err != cudaSuccess) {
+			std::cerr << "[ERROR] cudaMemcpyAsyncå¤±è´¥: " << cudaGetErrorString(err) << std::endl;
+			return ExceptionStatus::OccurredCuda;
+		}
+		auto memcpy_launch_end = std::chrono::high_resolution_clock::now();
+		auto memcpy_launch_time = std::chrono::duration<double, std::milli>(memcpy_launch_end - memcpy_start).count();
+
+		auto sync_start = std::chrono::high_resolution_clock::now();
+		err = cudaStreamSynchronize(ptr->stream);
+		if (err != cudaSuccess) {
+			std::cerr << "[ERROR] cudaStreamSynchronizeå¤±è´¥: " << cudaGetErrorString(err) << std::endl;
+			return ExceptionStatus::OccurredCuda;
+		}
+		auto sync_end = std::chrono::high_resolution_clock::now();
+		auto sync_time = std::chrono::duration<double, std::milli>(sync_end - sync_start).count();
+
+		auto step4_end = std::chrono::high_resolution_clock::now();
+		auto step4_time = std::chrono::duration<double, std::milli>(step4_end - step4_start).count();
+		TIMING_LOG_STREAM("[TIMING] GPUä¼ è¾“è€—æ—¶ " << step4_time
+			<< "ms (å¯åŠ¨=" << memcpy_launch_time << "ms, åŒæ­¥=" << sync_time << "ms)");
+		auto func_end = std::chrono::high_resolution_clock::now();
+		auto func_total_time = std::chrono::duration<double, std::milli>(func_end - func_start).count();
+
+		*hostData = static_cast<float*>(pinnedMem);
+		double transferSpeedMBps = (byteSize / 1024.0 / 1024.0) / (step4_time / 1000.0);
+		double overallSpeedMBps = (byteSize / 1024.0 / 1024.0) / (func_total_time / 1000.0);
+
+		if (g_enableDetailedTiming) {
+			std::cout << "[TIMING] æ¨ç†ç­‰å¾…: " << step1_time << "ms (" << (step1_time / func_total_time * 100) << "%)" << std::endl;
+			std::cout << "[TIMING] å¼ é‡æŸ¥æ‰¾: " << step2_time << "ms (" << (step2_time / func_total_time * 100) << "%)" << std::endl;
+			std::cout << "[TIMING] å†…å­˜æ± æ“ä½œ: " << step3_time << "ms (" << (step3_time / func_total_time * 100) << "%)" << std::endl;
+			std::cout << "[TIMING] GPUä¼ è¾“: " << step4_time << "ms (" << (step4_time / func_total_time * 100) << "%)" << std::endl;
+			std::cout << "[TIMING] æ€»è€—æ—¶: " << func_total_time << "ms" << std::endl;
+			std::cout << "[TIMING] çº¯ä¼ è¾“é€Ÿåº¦: " << transferSpeedMBps << " MB/s" << std::endl;
+			std::cout << "[TIMING] æ•´ä½“é€Ÿåº¦: " << overallSpeedMBps << " MB/s" << std::endl;
+		}
+		else {
+			std::cout << "[PERF] copyFloatDeviceToHostZeroCopy: " << func_total_time
+				<< "ms, " << overallSpeedMBps << "MB/s" << std::endl;
+		}
+
+		return ExceptionStatus::NotOccurred;
 	}
 	catch (const std::exception& e) {
-		std::cerr << "Exception: " << e.what() << std::endl;
+		std::cerr << "[EXCEPTION] C++å¼‚å¸¸: " << e.what() << std::endl;
+		return ExceptionStatus::Occurred;
+	}
+	catch (...) {
+		std::cerr << "[EXCEPTION] æœªçŸ¥C++å¼‚å¸¸" << std::endl;
+		return ExceptionStatus::Occurred;
+	}
+}
+
+// æ£€æŸ¥æ¨ç†æ˜¯å¦å®Œæˆçš„ç®€å•ç‰ˆæœ¬ï¼ˆä¾›C#è°ƒç”¨ï¼‰
+bool IsInferenceComplete(NvinferStruct* ptr)
+{
+	if (!ptr || !ptr->stream) {
+		return true;
+	}
+
+	cudaError_t streamStatus = cudaStreamQuery(ptr->stream);
+	bool isComplete = (streamStatus == cudaSuccess);
+
+	std::cout << "[DEBUG] æ¨ç†çŠ¶æ€æŸ¥è¯¢: " << (isComplete ? "å®Œæˆ" : "è¿›è¡Œä¸­") << std::endl;
+	return isComplete;
+}
+
+typedef void(*CopyCompleteCallback)(void* hostData, void* userData, double elapsedMs);
+
+ExceptionStatus copyFloatDeviceToHostAsync(
+	NvinferStruct* ptr,
+	const char* nodeName,
+	size_t elementCount,
+	CopyCompleteCallback callback,
+	void* userData)
+{
+	BEGIN_WRAP_TRTAPI
+		try {
+		auto funcStart = std::chrono::high_resolution_clock::now();
+		TIMING_LOG_STREAM("[TIMING-ASYNC] å¼€å§‹å¼‚æ­¥æ•°æ®ä¼ è¾“ï¼ŒèŠ‚ç‚¹: " << nodeName
+			<< ", å…ƒç´ æ•°: " << elementCount << ", æ•°æ®å¤§å°: " << (elementCount * sizeof(float) / 1024) << "KB");
+
+		auto step1_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING-ASYNC] æŸ¥æ‰¾å¼ é‡ç´¢å¼•...");
+
+		int32_t tensorIndex = findTensorIndex(ptr, nodeName);
+		if (tensorIndex < 0) {
+			std::cout << "[ERROR-ASYNC] æ— æ•ˆèŠ‚ç‚¹å: " << nodeName << std::endl;
+			return ExceptionStatus::OccurredTRT;
+		}
+
+		size_t byteSize = elementCount * sizeof(float);
+		auto step1_end = std::chrono::high_resolution_clock::now();
+		auto step1_time = std::chrono::duration<double, std::milli>(step1_end - step1_start).count();
+		TIMING_LOG_STREAM("[TIMING-ASYNC] å¼ é‡æŸ¥æ‰¾è€—æ—¶ " << step1_time << "ms (ç´¢å¼•=" << tensorIndex << ")");
+		auto step2_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING-ASYNC] åŒç¼“å†²æ± æŸ¥æ‰¾/åˆ†é…...");
+
+		struct BufferPair { void* hostBuf[2] = { nullptr, nullptr }; int index = 0; };
+		static std::unordered_map<size_t, BufferPair> g_doubleBufferPool;
+		static std::mutex g_mutex;
+		static size_t totalBufferAllocated = 0;
+		BufferPair* buffers = nullptr;
+		bool newBufferCreated = false;
+		auto pool_lookup_start = std::chrono::high_resolution_clock::now();
+		{
+			std::lock_guard<std::mutex> lock(g_mutex);
+			auto it = g_doubleBufferPool.find(byteSize);
+			if (it == g_doubleBufferPool.end()) {
+				TIMING_LOG_STREAM("[TIMING-ASYNC] åŒç¼“å†²æ± ä¸­æ— åŒ¹é…é¡¹ï¼Œåˆ›å»ºæ–°çš„åŒç¼“å†²å¯¹ï¼Œå¤§å°: " << (byteSize / 1024) << "KB");
+				BufferPair pair;
+				auto allocStart = std::chrono::high_resolution_clock::now();
+				CHECKCUDA(cudaMallocHost(&pair.hostBuf[0], byteSize));
+				CHECKCUDA(cudaMallocHost(&pair.hostBuf[1], byteSize));
+				auto allocEnd = std::chrono::high_resolution_clock::now();
+				pair.index = 0;
+				it = g_doubleBufferPool.emplace(byteSize, std::move(pair)).first;
+				newBufferCreated = true;
+				totalBufferAllocated += byteSize * 2;
+
+				auto allocTime = std::chrono::duration<double, std::milli>(allocEnd - allocStart).count();
+				TIMING_LOG_STREAM("[TIMING-ASYNC] åŒç¼“å†²åˆ†é…å®Œæˆï¼Œè€—æ—¶: " << allocTime << "ms, "
+					<< "æ± ä¸­æ€»ç¼“å†²: " << g_doubleBufferPool.size() << "ä¸ª, "
+					<< "æ€»å†…å­˜: " << (totalBufferAllocated / 1024 / 1024) << "MB");
+			}
+			else {
+				TIMING_LOG("[TIMING-ASYNC] å¤ç”¨ç°æœ‰åŒç¼“å†²å¯¹");
+			}
+			buffers = &it->second;
+		}
+		auto pool_lookup_end = std::chrono::high_resolution_clock::now();
+		auto pool_lookup_time = std::chrono::duration<double, std::milli>(pool_lookup_end - pool_lookup_start).count();
+
+		auto step2_end = std::chrono::high_resolution_clock::now();
+		auto step2_time = std::chrono::duration<double, std::milli>(step2_end - step2_start).count();
+		TIMING_LOG_STREAM("[TIMING-ASYNC] å®Œæˆ: åŒç¼“å†²æ± æ“ä½œè€—æ—¶ " << step2_time << "ms (æŸ¥æ‰¾/åˆ†é…="
+			<< pool_lookup_time << "ms, æ–°å»º=" << (newBufferCreated ? "æ˜¯" : "å¦") << ")");
+		auto step3_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING-ASYNC] æ£€æŸ¥GPUæµçŠ¶æ€...");
+
+		cudaError_t streamStatus = cudaStreamQuery(ptr->stream);
+		bool streamBusy = (streamStatus == cudaErrorNotReady);
+
+		auto step3_end = std::chrono::high_resolution_clock::now();
+		auto step3_time = std::chrono::duration<double, std::milli>(step3_end - step3_start).count();
+		TIMING_LOG_STREAM("[TIMING-ASYNC] GPUæµçŠ¶æ€æ£€æŸ¥è€—æ—¶ " << step3_time << "ms (çŠ¶æ€=" <<
+			(streamStatus == cudaSuccess ? "ç©ºé—²" :
+				streamStatus == cudaErrorNotReady ? "å¿™ç¢Œ" :
+				cudaGetErrorString(streamStatus)) << ")");
+		auto step4_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING-ASYNC] å¯åŠ¨å¼‚æ­¥GPU->ä¸»æœºä¼ è¾“...");
+
+		void* devicePtr = ptr->dataBuffer[tensorIndex];
+		int writeIndex = buffers->index;
+
+		TIMING_LOG_STREAM("[TIMING-ASYNC] ä½¿ç”¨ç¼“å†²åŒºç´¢å¼•: " << writeIndex
+			<< ", è®¾å¤‡æŒ‡é’ˆ: " << devicePtr
+			<< ", ä¸»æœºç¼“å†²: " << buffers->hostBuf[writeIndex]);
+		auto memcpy_launch_start = std::chrono::high_resolution_clock::now();
+		CHECKCUDA(cudaMemcpyAsync(
+			buffers->hostBuf[writeIndex],
+			devicePtr,
+			byteSize,
+			cudaMemcpyDeviceToHost,
+			ptr->stream));
+		auto memcpy_launch_end = std::chrono::high_resolution_clock::now();
+		auto memcpy_launch_time = std::chrono::duration<double, std::milli>(memcpy_launch_end - memcpy_launch_start).count();
+
+		auto step4_end = std::chrono::high_resolution_clock::now();
+		auto step4_time = std::chrono::duration<double, std::milli>(step4_end - step4_start).count();
+		TIMING_LOG_STREAM("[TIMING-ASYNC] å¼‚æ­¥ä¼ è¾“å¯åŠ¨è€—æ—¶ " << step4_time
+			<< "ms (çº¯å¯åŠ¨=" << memcpy_launch_time << "ms)");
+		auto step5_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING-ASYNC] è®¾ç½®å¼‚æ­¥å›è°ƒ...");
+		struct CallbackData {
+			CopyCompleteCallback cb;
+			void* buf;
+			void* userData;
+			std::chrono::high_resolution_clock::time_point startTime;
+			std::chrono::high_resolution_clock::time_point funcStartTime;
+			size_t byteSize;
+			int bufferIndex;
+			bool enableDetailedTiming;
+		};
+
+		auto* data = new CallbackData{
+			callback,
+			buffers->hostBuf[writeIndex],
+			userData,
+			memcpy_launch_start,
+			funcStart,
+			byteSize,
+			writeIndex,
+			g_enableDetailedTiming
+		};
+		CHECKCUDA(cudaLaunchHostFunc(ptr->stream, [](void* userData) {
+			auto* d = reinterpret_cast<CallbackData*>(userData);
+			auto endTime = std::chrono::high_resolution_clock::now();
+			auto transferElapsed = std::chrono::duration<double, std::milli>(endTime - d->startTime).count();
+			auto totalElapsed = std::chrono::duration<double, std::milli>(endTime - d->funcStartTime).count();
+			double transferSpeedMBps = (d->byteSize / 1024.0 / 1024.0) / (transferElapsed / 1000.0);
+			double overallSpeedMBps = (d->byteSize / 1024.0 / 1024.0) / (totalElapsed / 1000.0);
+
+			if (d->enableDetailedTiming) {
+				std::cout << "[TIMING-ASYNC-CALLBACK] çº¯GPUä¼ è¾“æ—¶é—´: " << transferElapsed << "ms" << std::endl;
+				std::cout << "[TIMING-ASYNC-CALLBACK] æ€»ä½“å¼‚æ­¥è€—æ—¶: " << totalElapsed << "ms" << std::endl;
+				std::cout << "[TIMING-ASYNC-CALLBACK] çº¯ä¼ è¾“é€Ÿåº¦: " << transferSpeedMBps << " MB/s" << std::endl;
+				std::cout << "[TIMING-ASYNC-CALLBACK] æ•´ä½“å¼‚æ­¥é€Ÿåº¦: " << overallSpeedMBps << " MB/s" << std::endl;
+				std::cout << "[TIMING-ASYNC-CALLBACK] ç¼“å†²åŒºç´¢å¼•: " << d->bufferIndex << std::endl;
+				std::cout << "[TIMING-ASYNC-CALLBACK] æ•°æ®å¤§å°: " << (d->byteSize / 1024) << "KB" << std::endl;
+			}
+			else {
+				std::cout << "[PERF-ASYNC-CALLBACK] å¼‚æ­¥ä¼ è¾“å®Œæˆ: ä¼ è¾“=" << transferElapsed
+					<< "ms, æ€»è®¡=" << totalElapsed << "ms, é€Ÿåº¦=" << transferSpeedMBps << "MB/s" << std::endl;
+			}
+
+			if (d->cb) {
+				TIMING_LOG("[TIMING-ASYNC-CALLBACK] æ‰§è¡Œç”¨æˆ·å›è°ƒå‡½æ•°");
+				d->cb(d->buf, d->userData, transferElapsed);
+			}
+
+			delete d;
+			}, data));
+
+		auto step5_end = std::chrono::high_resolution_clock::now();
+		auto step5_time = std::chrono::duration<double, std::milli>(step5_end - step5_start).count();
+		TIMING_LOG_STREAM("[TIMING-ASYNC] å›è°ƒè®¾ç½®è€—æ—¶ " << step5_time << "ms");
+		auto step6_start = std::chrono::high_resolution_clock::now();
+		TIMING_LOG("[TIMING-ASYNC] ç¼“å†²åŒºç´¢å¼•åˆ‡æ¢...");
+		int oldIndex = buffers->index;
+		buffers->index ^= 1;
+		auto step6_end = std::chrono::high_resolution_clock::now();
+		auto step6_time = std::chrono::duration<double, std::milli>(step6_end - step6_start).count();
+		TIMING_LOG_STREAM("[TIMING-ASYNC] ç¼“å†²åŒºåˆ‡æ¢è€—æ—¶ " << step6_time
+			<< "ms (ä»ç´¢å¼•" << oldIndex << "åˆ‡æ¢åˆ°" << buffers->index << ")");
+		auto funcEnd = std::chrono::high_resolution_clock::now();
+		auto funcTime = std::chrono::duration<double, std::milli>(funcEnd - funcStart).count();
+
+		if (g_enableDetailedTiming) {
+			std::cout << "[TIMING-ASYNC] å¼ é‡æŸ¥æ‰¾: " << step1_time << "ms (" << (step1_time / funcTime * 100) << "%)" << std::endl;
+			std::cout << "[TIMING-ASYNC] åŒç¼“å†²æ± : " << step2_time << "ms (" << (step2_time / funcTime * 100) << "%)" << std::endl;
+			std::cout << "[TIMING-ASYNC] æµçŠ¶æ€æ£€æŸ¥: " << step3_time << "ms (" << (step3_time / funcTime * 100) << "%)" << std::endl;
+			std::cout << "[TIMING-ASYNC] ä¼ è¾“å¯åŠ¨: " << step4_time << "ms (" << (step4_time / funcTime * 100) << "%)" << std::endl;
+			std::cout << "[TIMING-ASYNC] å›è°ƒè®¾ç½®: " << step5_time << "ms (" << (step5_time / funcTime * 100) << "%)" << std::endl;
+			std::cout << "[TIMING-ASYNC] ç¼“å†²åˆ‡æ¢: " << step6_time << "ms (" << (step6_time / funcTime * 100) << "%)" << std::endl;
+			std::cout << "[TIMING-ASYNC] æ‰§è¡Œæ€»è€—æ—¶: " << funcTime << "ms" << std::endl;
+			if (step2_time > funcTime * 0.4) {
+				std::cout << "[ANALYSIS-ASYNC] åŒç¼“å†²æ± æ“ä½œå æ¯”è¿‡é«˜(" << (step2_time / funcTime * 100) << "%)" << std::endl;
+			}
+			if (newBufferCreated) {
+				std::cout << "[ANALYSIS-ASYNC] åˆ›å»ºåŒç¼“å†²æ± " << std::endl;
+			}
+			if (streamBusy) {
+				std::cout << "[ANALYSIS-ASYNC] GPUæµå¿™ç¢ŒçŠ¶æ€ï¼Œå¼‚æ­¥ä¼ è¾“å°†åœ¨GPUå®Œæˆå½“å‰ä»»åŠ¡åæ‰§è¡Œ" << std::endl;
+			}
+			else {
+				std::cout << "[ANALYSIS-ASYNC] GPUæµç©ºé—²çŠ¶æ€ï¼Œå¼‚æ­¥ä¼ è¾“å°†ç«‹å³å¼€å§‹" << std::endl;
+			}
+			std::cout << "[ANALYSIS-ASYNC] å¼‚æ­¥ä¼˜åŠ¿: ä¸»çº¿ç¨‹è€—æ—¶ä»…" << funcTime << "msï¼Œå®é™…ä¼ è¾“åœ¨åå°è¿›è¡Œ" << std::endl;
+		}
+		else {
+			std::cout << "[PERF-ASYNC] copyFloatDeviceToHostAsyncå¯åŠ¨: " << funcTime
+				<< "ms (å¼‚æ­¥ä¼ è¾“è¿›è¡Œä¸­)" << std::endl;
+		}
+
+		TIMING_LOG("[TIMING-ASYNC] å¼‚æ­¥ä¼ è¾“å·²å¯åŠ¨ï¼Œç­‰å¾…GPUå®Œæˆ...");
+
+		return ExceptionStatus::NotOccurred;
+	}
+	catch (const std::exception& e) {
+		std::cerr << "[EXCEPTION-ASYNC] C++å¼‚å¸¸: " << e.what() << std::endl;
 		return ExceptionStatus::Occurred;
 	}
 	END_WRAP_TRTAPI
 }
 
-// ÇåÀíÖ÷»úµ½Éè±¸µÄÄÚ´æ³Ø
+
+// æ¸…ç†ä¸»æœºåˆ°è®¾å¤‡çš„å†…å­˜æ± 
 void cleanupHostToDevicePinnedMemoryPool()
 {
 	std::lock_guard<std::mutex> lock(g_hostToDeviceMemoryPoolMutex);
@@ -457,7 +832,7 @@ void cleanupHostToDevicePinnedMemoryPool()
 	g_hostToDevicePinnedMemoryPool.clear();
 }
 
-// ÇåÀíÉè±¸µ½Ö÷»úµÄÄÚ´æ³Ø
+// æ¸…ç†è®¾å¤‡åˆ°ä¸»æœºçš„å†…å­˜æ± 
 void cleanupDeviceToHostPinnedMemoryPool()
 {
 	std::lock_guard<std::mutex> lock(g_deviceToHostMemoryPoolMutex);
@@ -467,7 +842,30 @@ void cleanupDeviceToHostPinnedMemoryPool()
 	g_deviceToHostPinnedMemoryPool.clear();
 }
 
-// ÇåÀíËùÓĞµÄÄÚ´æ³Ø
+// é‡Šæ”¾ç‰¹å®šå¤§å°çš„è®¾å¤‡åˆ°ä¸»æœºå›ºå®šå†…å­˜ï¼ˆå¯é€‰ä¼˜åŒ–ï¼‰
+void releaseDeviceToHostPinnedMemory(size_t byteSize)
+{
+	std::lock_guard<std::mutex> lock(g_deviceToHostMemoryPoolMutex);
+	auto it = g_deviceToHostPinnedMemoryPool.find(byteSize);
+	if (it != g_deviceToHostPinnedMemoryPool.end()) {
+		cudaFreeHost(it->second);
+		g_deviceToHostPinnedMemoryPool.erase(it);
+		std::cout << "[DEBUG] å·²é‡Šæ”¾å›ºå®šå†…å­˜ï¼Œå¤§å°: " << (byteSize / 1024) << "KB" << std::endl;
+	}
+}
+
+// è·å–å†…å­˜æ± çŠ¶æ€ä¿¡æ¯
+void getDeviceToHostMemoryPoolInfo(int* poolSize, size_t* totalMemoryBytes)
+{
+	std::lock_guard<std::mutex> lock(g_deviceToHostMemoryPoolMutex);
+	*poolSize = static_cast<int>(g_deviceToHostPinnedMemoryPool.size());
+	*totalMemoryBytes = 0;
+	for (const auto& entry : g_deviceToHostPinnedMemoryPool) {
+		*totalMemoryBytes += entry.first;
+	}
+}
+
+// æ¸…ç†æ‰€æœ‰çš„å†…å­˜æ± 
 void cleanupAllPinnedMemoryPools()
 {
 	cleanupHostToDevicePinnedMemoryPool();
@@ -477,8 +875,13 @@ void cleanupAllPinnedMemoryPools()
 ExceptionStatus copyFloatDeviceToHostByIndex(NvinferStruct* ptr, int nodeIndex, float* data)
 {
 	BEGIN_WRAP_TRTAPI
-		// »ñÈ¡ÊäÈë½ÚµãÎ´¶ÁĞÅÏ¢
-		CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
+		if (nodeIndex < 0 || nodeIndex >= ptr->numTensors) {
+			return ExceptionStatus::OccurredTRT;
+		}
+
+	const char* tensorName = ptr->tensorNames[nodeIndex];
+	// è·å–å¼ é‡å½¢çŠ¶ä¿¡æ¯
+	nvinfer1::Dims dims = ptr->context->getTensorShape(tensorName);
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
 	size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
 	CHECKCUDA(cudaMemcpyAsync(data, ptr->dataBuffer[nodeIndex], size * sizeof(float), cudaMemcpyDeviceToHost, ptr->stream));
@@ -489,18 +892,34 @@ ExceptionStatus copyFloatDeviceToHostByIndex(NvinferStruct* ptr, int nodeIndex, 
 ExceptionStatus nvinferDelete(NvinferStruct* ptr)
 {
 	BEGIN_WRAP_TRTAPI
-		CHECKTRT(int numNode = ptr->engine->getNbBindings());
-	for (int i = 0; i < numNode; ++i)
-	{
-		CHECKCUDA(cudaFree(ptr->dataBuffer[i]);)
-			ptr->dataBuffer[i] = nullptr;
-	}
-	delete ptr->dataBuffer;
+		// æ¸…ç†GPUå†…å­˜ç¼“å†²åŒº
+		for (int32_t i = 0; i < ptr->numTensors; ++i)
+		{
+			if (ptr->dataBuffer[i]) {
+				CHECKCUDA(cudaFree(ptr->dataBuffer[i]);)
+					ptr->dataBuffer[i] = nullptr;
+			}
+		}
+	delete[] ptr->dataBuffer;
 	ptr->dataBuffer = nullptr;
-	CHECKTRT(ptr->context->destroy();)
-		CHECKTRT(ptr->engine->destroy();)
-		CHECKTRT(ptr->runtime->destroy();)
-		CHECKCUDA(cudaStreamDestroy(ptr->stream));
+
+	// æ¸…ç†å¼ é‡åç§°
+	if (ptr->tensorNames) {
+		for (int32_t i = 0; i < ptr->numTensors; ++i) {
+			if (ptr->tensorNames[i]) {
+				delete[] ptr->tensorNames[i];
+				ptr->tensorNames[i] = nullptr;
+			}
+		}
+		delete[] ptr->tensorNames;
+		ptr->tensorNames = nullptr;
+	}
+
+	// æ¸…ç†èµ„æº
+	delete ptr->context;
+	delete ptr->engine;
+	delete ptr->runtime;
+	CHECKCUDA(cudaStreamDestroy(ptr->stream));
 	delete ptr;
 	END_WRAP_TRTAPI
 }
@@ -508,9 +927,8 @@ ExceptionStatus nvinferDelete(NvinferStruct* ptr)
 ExceptionStatus getBindingDimensionsByName(NvinferStruct* ptr, const char* nodeName, int* dimLength, int* dims)
 {
 	BEGIN_WRAP_TRTAPI
-		CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
-	// »ñÈ¡ÊäÈë½ÚµãÎ´¶ÁĞÅÏ¢
-	CHECKTRT(nvinfer1::Dims shape_d = ptr->context->getBindingDimensions(nodeIndex));
+		// è·å–å¼ é‡å½¢çŠ¶ä¿¡æ¯
+		nvinfer1::Dims shape_d = ptr->context->getTensorShape(nodeName);
 	*dimLength = shape_d.nbDims;
 	for (int i = 0; i < *dimLength; ++i)
 	{
@@ -522,13 +940,28 @@ ExceptionStatus getBindingDimensionsByName(NvinferStruct* ptr, const char* nodeN
 ExceptionStatus getBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, int* dimLength, int* dims)
 {
 	BEGIN_WRAP_TRTAPI
-		// »ñÈ¡ÊäÈë½ÚµãÎ´¶ÁĞÅÏ¢
-		CHECKTRT(nvinfer1::Dims shape_d = ptr->context->getBindingDimensions(nodeIndex));
+		if (nodeIndex < 0 || nodeIndex >= ptr->numTensors) {
+			return ExceptionStatus::OccurredTRT;
+		}
+
+	const char* tensorName = ptr->tensorNames[nodeIndex];
+	// è·å–å¼ é‡å½¢çŠ¶ä¿¡æ¯
+	nvinfer1::Dims shape_d = ptr->context->getTensorShape(tensorName);
 	*dimLength = shape_d.nbDims;
 	for (int i = 0; i < *dimLength; ++i)
 	{
 		*dims++ = shape_d.d[i];
 	}
+	END_WRAP_TRTAPI
+}
+
+// é‡Šæ”¾æ˜ å°„çš„ä¸»æœºå†…å­˜
+ExceptionStatus freeMappedHostMemory(float* mappedPtr)
+{
+	BEGIN_WRAP_TRTAPI
+		if (mappedPtr) {
+			CHECKCUDA(cudaFreeHost(mappedPtr));
+		}
 	END_WRAP_TRTAPI
 }
 

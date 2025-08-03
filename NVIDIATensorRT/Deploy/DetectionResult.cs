@@ -1,10 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
-
-namespace NVIDIATensorRT.Deploy
+﻿namespace NVIDIATensorRT.Deploy
 {
     /// <summary>
     /// 目标框结构
