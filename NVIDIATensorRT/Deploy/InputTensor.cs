@@ -1,8 +1,4 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using OpenCvSharp;
 
 namespace NVIDIATensorRT.Deploy
 {
@@ -31,5 +27,9 @@ namespace NVIDIATensorRT.Deploy
         /// 张量大小
         /// </summary>
         public int MagnitudeTensor => BatchSize * Channels * Height * Width;
+        /// <summary>
+        /// 输入图像尺寸
+        /// </summary>
+        public Size[] InputImageSize { get; set; }
     }
 }

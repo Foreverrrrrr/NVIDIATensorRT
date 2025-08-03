@@ -1,10 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
+﻿using NVIDIATensorRT.Internal.PInvoke;
 using System.Runtime.InteropServices;
-using System.Text;
-using System.Threading.Tasks;
-using NVIDIATensorRT.Internal.PInvoke;
 
 namespace NVIDIATensorRT.Internal
 {
@@ -64,4 +59,5 @@ namespace NVIDIATensorRT.Internal
             throw new TRTException(ExceptionStatus.OccurredCuda, Marshal.PtrToStringAnsi(NativeMethods.trt_get_last_err_msg()));
         }
     }
+
 }

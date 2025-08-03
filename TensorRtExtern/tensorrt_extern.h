@@ -18,8 +18,6 @@
 
 
 
-
-
 // @brief 推理核心结构体
 typedef struct tensorRT_nvinfer {
 	// 反序列化引擎
@@ -41,7 +39,7 @@ typedef struct tensorRT_nvinfer {
 // @brief 将本地onnx模型转为tensorrt中的engine格式，并保存到本地
 TRTAPI(ExceptionStatus) onnxToEngine(const char* onnxFile, int memorySize);
 
-TRTAPI(ExceptionStatus) onnxToEngineDynamicShape(const char* onnxFile, int memorySize, const char* nodeName,
+TRTAPI(ExceptionStatus) onnxToEngineDynamicShape(const char* onnxFile, int memorySize, const char* nodeName, 
 	int* minShapes, int* optShapes, int* maxShapes);
 
 // @brief 读取本地engine模型，并初始化NvinferStruct，分配缓存空间
@@ -80,6 +78,20 @@ TRTAPI(ExceptionStatus) getBindingDimensionsByName(NvinferStruct* ptr, const cha
 // @brief 通过节点编号获取绑定节点的形状信息
 TRTAPI(ExceptionStatus) getBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, int* dimLength, int* dims);
 
+
+// ========== 新增部分 ==========
+// @brief C 回调函数定义（给 C# 注册用）
+// hostData: 指向Pinned Host内存 (已拷贝完成的数据)
+// userData: 用户传入的上下文指针（可以在C#中传GCHandle或IntPtr）
+typedef void(*CopyCompleteCallback)(void* hostData, void* userData, double elapsedMs);
+
+TRTAPI(ExceptionStatus) copyFloatDeviceToHostAsync(
+	NvinferStruct* ptr,
+	const char* nodeName,
+	size_t elementCount,
+	CopyCompleteCallback callback,
+	void* userData
+);
 
 #endif // !TENSORRT_EXTERN_H
 
