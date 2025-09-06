@@ -1381,6 +1381,7 @@ namespace NVIDIATensorRT.Deploy
         {
             if (NVIDIAPredictor == null)
                 throw new Exception("NVIDIAPredictor初始化失败！");
+            List<Mat> values = new List<Mat> { mat };
             Stopwatch totalWatch = Stopwatch.StartNew();
             Stopwatch sw = Stopwatch.StartNew();
             var intptr = ProcessBatch(ref inputtensor, values);

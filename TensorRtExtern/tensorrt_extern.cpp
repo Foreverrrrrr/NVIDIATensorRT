@@ -9,71 +9,71 @@
 #include "common.h"
 #include <unordered_map>
 
-// 主机到设备的零拷贝内存池
+// �������豸���㿽���ڴ��
 std::unordered_map<size_t, void*> g_hostToDevicePinnedMemoryPool;
 std::mutex g_hostToDeviceMemoryPoolMutex;
 
-// 设备到主机的零拷贝内存池
+// �豸���������㿽���ڴ��
 std::unordered_map<size_t, void*> g_deviceToHostPinnedMemoryPool;
 std::mutex g_deviceToHostMemoryPoolMutex;
 
-// @brief 将本地onnx模型转为tensorrt中的engine格式，并保存到本地
-// @param onnx_file_path_wchar onnx模型本地地址
-// @param engine_file_path_wchar engine模型本地地址
-// @param type 输出模型精度，
+// @brief ������onnxģ��תΪtensorrt�е�engine��ʽ�������浽����
+// @param onnx_file_path_wchar onnxģ�ͱ��ص�ַ
+// @param engine_file_path_wchar engineģ�ͱ��ص�ַ
+// @param type ���ģ�;��ȣ�
 ExceptionStatus onnxToEngine(const char* onnxFile, int memorySize) {
 	BEGIN_WRAP_TRTAPI
-	// 将路径作为参数传递给函数
+	// ��·����Ϊ�������ݸ�����
 	std::string path(onnxFile);
 	std::string::size_type iPos = (path.find_last_of('\\') + 1) == 0 ? path.find_last_of('/') + 1 : path.find_last_of('\\') + 1;
-	std::string modelPath = path.substr(0, iPos);//获取文件路径
-	std::string modelName = path.substr(iPos, path.length() - iPos);//获取带后缀的文件名
-	std::string modelName_ = modelName.substr(0, modelName.rfind("."));//获取不带后缀的文件名名
+	std::string modelPath = path.substr(0, iPos);//��ȡ�ļ�·��
+	std::string modelName = path.substr(iPos, path.length() - iPos);//��ȡ����׺���ļ���
+	std::string modelName_ = modelName.substr(0, modelName.rfind("."));//��ȡ������׺���ļ�����
 	std::string engineFile = modelPath + modelName_ + ".engine";
 	//std::cout << model_name << std::endl;
 	//std::cout << model_name_ << std::endl;
 	//std::cout << model_path << std::endl;
 	//std::cout << engine_file << std::endl;
 
-	// 构建器，获取cuda内核目录以获取最快的实现
-	// 用于创建config、network、engine的其他对象的核心类
+	// ����������ȡcuda�ں�Ŀ¼�Ի�ȡ����ʵ��
+	// ���ڴ���config��network��engine����������ĺ�����
 	nvinfer1::IBuilder* builder = nvinfer1::createInferBuilder(sample::gLogger.getTRTLogger());
-	// 定义网络属性
+	// ������������
 	const auto explicitBatch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-	// 解析onnx网络文件
-	// tensorRT模型类
+	// ����onnx�����ļ�
+	// tensorRTģ����
 	nvinfer1::INetworkDefinition* network = builder->createNetworkV2(explicitBatch);
-	// onnx文件解析类
-	// 将onnx文件解析，并填充rensorRT网络结构
+	// onnx�ļ�������
+	// ��onnx�ļ������������rensorRT����ṹ
 	nvonnxparser::IParser* parser = nvonnxparser::createParser(*network, sample::gLogger.getTRTLogger());
-	// 解析onnx文件
+	// ����onnx�ļ�
 	parser->parseFromFile(onnxFile, 2);
 	for (int i = 0; i < parser->getNbErrors(); ++i) {
 		std::cout << "load error: " << parser->getError(i)->desc() << std::endl;
 	}
 	printf("tensorRT load mask onnx model successfully!!!...\n");
 
-	// 创建推理引擎
-	// 创建生成器配置对象。
+	// ������������
+	// �������������ö���
 	nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
-	// 设置最大工作空间大小。
+	// ����������ռ��С��
 	config->setMaxWorkspaceSize(1024 * 1024 * memorySize);
-	// 设置模型输出精度
+	// ����ģ���������
 	config->setFlag(nvinfer1::BuilderFlag::kFP16);
-	// 创建推理引擎
+	// ������������
 	nvinfer1::ICudaEngine* engine = builder->buildEngineWithConfig(*network, *config);
-	// 将推理银枪保存到本地
+	// ��������ǹ���浽����
 	std::cout << "try to save engine file now~~~" << std::endl;
 	std::ofstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr) {
 		std::cerr << "could not open plan output file" << std::endl;
 		return ExceptionStatus::Occurred;
 	}
-	// 将模型转化为文件流数据
+	// ��ģ��ת��Ϊ�ļ�������
 	nvinfer1::IHostMemory* modelStream = engine->serialize();
-	// 将文件保存到本地
+	// ���ļ����浽����
 	filePtr.write(reinterpret_cast<const char*>(modelStream->data()), modelStream->size());
-	// 销毁创建的对象
+	// ���ٴ����Ķ���
 	modelStream->destroy();
 	engine->destroy();
 	network->destroy();
@@ -86,33 +86,33 @@ ExceptionStatus onnxToEngineDynamicShape(const char* onnxFile, int memorySize, c
 	int* minShapes, int* optShapes, int* maxShapes) 
 {
 	BEGIN_WRAP_TRTAPI
-		// 将路径作为参数传递给函数
+		// ��·����Ϊ�������ݸ�����
 		std::string path(onnxFile);
 	std::string::size_type iPos = (path.find_last_of('\\') + 1) == 0 ? path.find_last_of('/') + 1 : path.find_last_of('\\') + 1;
-	std::string modelPath = path.substr(0, iPos);//获取文件路径
-	std::string modelName = path.substr(iPos, path.length() - iPos);//获取带后缀的文件名
-	std::string modelName_ = modelName.substr(0, modelName.rfind("."));//获取不带后缀的文件名名
+	std::string modelPath = path.substr(0, iPos);//��ȡ�ļ�·��
+	std::string modelName = path.substr(iPos, path.length() - iPos);//��ȡ����׺���ļ���
+	std::string modelName_ = modelName.substr(0, modelName.rfind("."));//��ȡ������׺���ļ�����
 	std::string engineFile = modelPath + modelName_ + ".engine";
 	//std::cout << model_name << std::endl;
 	//std::cout << model_name_ << std::endl;
 	//std::cout << model_path << std::endl;
 	//std::cout << engine_file << std::endl;
 
-	// 构建器，获取cuda内核目录以获取最快的实现
-	// 用于创建config、network、engine的其他对象的核心类
+	// ����������ȡcuda�ں�Ŀ¼�Ի�ȡ����ʵ��
+	// ���ڴ���config��network��engine����������ĺ�����
 	nvinfer1::IBuilder* builder = nvinfer1::createInferBuilder(sample::gLogger.getTRTLogger());
-	// 定义网络属性
+	// ������������
 	const auto explicitBatch = 1U << static_cast<uint32_t>(nvinfer1::NetworkDefinitionCreationFlag::kEXPLICIT_BATCH);
-	// 解析onnx网络文件
-	// tensorRT模型类
+	// ����onnx�����ļ�
+	// tensorRTģ����
 	nvinfer1::INetworkDefinition* network = builder->createNetworkV2(explicitBatch);
 
-	// 创建推理引擎
-	// 创建生成器配置对象。
+	// ������������
+	// �������������ö���
 	nvinfer1::IBuilderConfig* config = builder->createBuilderConfig();
-	// 设置最大工作空间大小。
+	// ����������ռ��С��
 	config->setMaxWorkspaceSize(1024 * 1024 * memorySize);
-	// 设置模型输出精度
+	// ����ģ���������
 	config->setFlag(nvinfer1::BuilderFlag::kFP16);
 
 	nvinfer1::IOptimizationProfile* profile = builder->createOptimizationProfile();
@@ -123,30 +123,30 @@ ExceptionStatus onnxToEngineDynamicShape(const char* onnxFile, int memorySize, c
 
 	config->addOptimizationProfile(profile);
 
-	// onnx文件解析类
-	// 将onnx文件解析，并填充rensorRT网络结构
+	// onnx�ļ�������
+	// ��onnx�ļ������������rensorRT����ṹ
 	nvonnxparser::IParser* parser = nvonnxparser::createParser(*network, sample::gLogger.getTRTLogger());
-	// 解析onnx文件
+	// ����onnx�ļ�
 	parser->parseFromFile(onnxFile, 2);
 	for (int i = 0; i < parser->getNbErrors(); ++i) {
 		std::cout << "load error: " << parser->getError(i)->desc() << std::endl;
 	}
 	printf("tensorRT load mask onnx model successfully!!!...\n");
 
-	// 创建推理引擎
+	// ������������
 	nvinfer1::ICudaEngine* engine = builder->buildEngineWithConfig(*network, *config);
-	// 将推理银枪保存到本地
+	// ��������ǹ���浽����
 	std::cout << "try to save engine file now~~~" << std::endl;
 	std::ofstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr) {
 		std::cerr << "could not open plan output file" << std::endl;
 		return ExceptionStatus::Occurred;
 	}
-	// 将模型转化为文件流数据
+	// ��ģ��ת��Ϊ�ļ�������
 	nvinfer1::IHostMemory* modelStream = engine->serialize();
-	// 将文件保存到本地
+	// ���ļ����浽����
 	filePtr.write(reinterpret_cast<const char*>(modelStream->data()), modelStream->size());
-	// 销毁创建的对象
+	// ���ٴ����Ķ���
 	modelStream->destroy();
 	engine->destroy();
 	network->destroy();
@@ -158,35 +158,35 @@ ExceptionStatus onnxToEngineDynamicShape(const char* onnxFile, int memorySize, c
 ExceptionStatus nvinferInit(const char* engineFile, NvinferStruct** ptr) {
 	BEGIN_WRAP_TRTAPI
 		initLibNvInferPlugins(nullptr, "");
-	// 以二进制方式读取问价
+	// �Զ����Ʒ�ʽ��ȡ�ʼ�
 	std::ifstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr.good()) {
-		std::cerr << "文件无法打开，请确定文件是否可用！" << std::endl;
+		std::cerr << "�ļ��޷��򿪣���ȷ���ļ��Ƿ���ã�" << std::endl;
 		dup_last_err_msg("Model file reading error, please confirm if the file exists or if the format is correct.");
 		return ExceptionStatus::Occurred;
 	}
 
 	size_t size = 0;
-	filePtr.seekg(0, filePtr.end);	// 将读指针从文件末尾开始移动0个字节
-	size = filePtr.tellg();	// 返回读指针的位置，此时读指针的位置就是文件的字节数
-	filePtr.seekg(0, filePtr.beg);	// 将读指针从文件开头开始移动0个字节
+	filePtr.seekg(0, filePtr.end);	// ����ָ����ļ�ĩβ��ʼ�ƶ�0���ֽ�
+	size = filePtr.tellg();	// ���ض�ָ���λ�ã���ʱ��ָ���λ�þ����ļ����ֽ���
+	filePtr.seekg(0, filePtr.beg);	// ����ָ����ļ���ͷ��ʼ�ƶ�0���ֽ�
 	char* modelStream = new char[size];
 	filePtr.read(modelStream, size);
-	// 关闭文件
+	// �ر��ļ�
 	filePtr.close();
 
-	// 创建推理核心结构体，初始化变量
+	// ����������Ľṹ�壬��ʼ������
 	NvinferStruct* p = new NvinferStruct();
-	// 初始化反序列化引擎
+	// ��ʼ�������л�����
 	CHECKTRT(p->runtime = nvinfer1::createInferRuntime(sample::gLogger.getTRTLogger()));
 	CHECKTRT(p->runtime->setErrorRecorder(&gRecorder));
-	// 初始化推理引擎
+	// ��ʼ����������
 	CHECKTRT(p->engine = p->runtime->deserializeCudaEngine(modelStream, size));
-	// 创建上下文
+	// ����������
 	CHECKTRT(p->context = p->engine->createExecutionContext());
 	CHECKCUDA(cudaStreamCreate(&(p->stream)));
 	CHECKTRT(int numNode = p->engine->getNbBindings());
-	// 创建gpu数据缓冲区
+	// ����gpu���ݻ�����
 	p->dataBuffer = new void* [numNode];
 	delete[] modelStream;
 
@@ -198,7 +198,7 @@ ExceptionStatus nvinferInit(const char* engineFile, NvinferStruct** ptr) {
 		switch (type)
 		{
 		case nvinfer1::DataType::kINT32:
-		case nvinfer1::DataType::kFLOAT: size *= 4; break;  // 明确为类型 float
+		case nvinfer1::DataType::kFLOAT: size *= 4; break;  // ��ȷΪ���� float
 		case nvinfer1::DataType::kHALF: size *= 2; break;
 		case nvinfer1::DataType::kBOOL:
 		case nvinfer1::DataType::kINT8:
@@ -210,39 +210,39 @@ ExceptionStatus nvinferInit(const char* engineFile, NvinferStruct** ptr) {
 	END_WRAP_TRTAPI
 }
 
-// @brief 读取本地engine模型，并初始化NvinferStruct，分配缓存空间
+// @brief ��ȡ����engineģ�ͣ�����ʼ��NvinferStruct�����仺��ռ�
 ExceptionStatus nvinferInitDynamicShape(const char* engineFile, int maxBatahSize, NvinferStruct** ptr) {
 	BEGIN_WRAP_TRTAPI
 		initLibNvInferPlugins(nullptr, "");
-		// 以二进制方式读取问价
+		// �Զ����Ʒ�ʽ��ȡ�ʼ�
 		std::ifstream filePtr(engineFile, std::ios::binary);
 	if (!filePtr.good()) {
-		std::cerr << "文件无法打开，请确定文件是否可用！" << std::endl;
+		std::cerr << "�ļ��޷��򿪣���ȷ���ļ��Ƿ���ã�" << std::endl;
 		dup_last_err_msg("Model file reading error, please confirm if the file exists or if the format is correct.");
 		return ExceptionStatus::Occurred;
 	}
 
 	size_t size = 0;
-	filePtr.seekg(0, filePtr.end);	// 将读指针从文件末尾开始移动0个字节
-	size = filePtr.tellg();	// 返回读指针的位置，此时读指针的位置就是文件的字节数
-	filePtr.seekg(0, filePtr.beg);	// 将读指针从文件开头开始移动0个字节
+	filePtr.seekg(0, filePtr.end);	// ����ָ����ļ�ĩβ��ʼ�ƶ�0���ֽ�
+	size = filePtr.tellg();	// ���ض�ָ���λ�ã���ʱ��ָ���λ�þ����ļ����ֽ���
+	filePtr.seekg(0, filePtr.beg);	// ����ָ����ļ���ͷ��ʼ�ƶ�0���ֽ�
 	char* modelStream = new char[size];
 	filePtr.read(modelStream, size);
-	// 关闭文件
+	// �ر��ļ�
 	filePtr.close();
 
-	// 创建推理核心结构体，初始化变量
+	// ����������Ľṹ�壬��ʼ������
 	NvinferStruct* p = new NvinferStruct();
-	// 初始化反序列化引擎
+	// ��ʼ�������л�����
 	CHECKTRT(p->runtime = nvinfer1::createInferRuntime(sample::gLogger.getTRTLogger()));
 	CHECKTRT(p->runtime->setErrorRecorder(&gRecorder));
-	// 初始化推理引擎
+	// ��ʼ����������
 	CHECKTRT(p->engine = p->runtime->deserializeCudaEngine(modelStream, size));
-	// 创建上下文
+	// ����������
 	CHECKTRT(p->context = p->engine->createExecutionContext());
 	CHECKCUDA(cudaStreamCreate(&(p->stream)));
 	CHECKTRT(int numNode = p->engine->getNbBindings());
-	// 创建gpu数据缓冲区
+	// ����gpu���ݻ�����
 	p->dataBuffer = new void* [numNode];
 	delete[] modelStream;
 
@@ -253,7 +253,7 @@ ExceptionStatus nvinferInitDynamicShape(const char* engineFile, int maxBatahSize
 		switch (type)
 		{
 		case nvinfer1::DataType::kINT32:
-		case nvinfer1::DataType::kFLOAT: size *= 4; break;  // 明确为类型 float
+		case nvinfer1::DataType::kFLOAT: size *= 4; break;  // ��ȷΪ���� float
 		case nvinfer1::DataType::kHALF: size *= 2; break;
 		case nvinfer1::DataType::kBOOL:
 		case nvinfer1::DataType::kINT8:
@@ -269,7 +269,7 @@ ExceptionStatus copyFloatHostToDeviceByName(NvinferStruct* ptr, const char* node
 {
 	BEGIN_WRAP_TRTAPI
 	CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
-	// 获取输入节点未读信息
+	// ��ȡ����ڵ�δ����Ϣ
 	CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
 	size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
@@ -309,7 +309,7 @@ ExceptionStatus copyFloatHostToDeviceByNameZeroCopy(
 #else
 		CHECKCUDA(cudaMemcpyAsync(devicePtr, pinnedMem, byteSize,
 			cudaMemcpyHostToDevice, ptr->stream));
-		CHECKCUDA(cudaStreamSynchronize(ptr->stream)); // 确保数据已传输到设备
+		CHECKCUDA(cudaStreamSynchronize(ptr->stream)); // ȷ�������Ѵ��䵽�豸
 #endif
 
 	}
@@ -324,7 +324,7 @@ ExceptionStatus copyFloatHostToDeviceByNameZeroCopy(
 ExceptionStatus copyFloatHostToDeviceByIndex(NvinferStruct* ptr, int nodeIndex, float* data)
 {
 	BEGIN_WRAP_TRTAPI
-	// 获取输入节点未读信息
+	// ��ȡ����ڵ�δ����Ϣ
 	CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
 	size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
@@ -375,7 +375,7 @@ ExceptionStatus tensorRtInfer(NvinferStruct* ptr)
 }
 
 /// <summary>
-/// 推理指针GPU取流到CPU
+/// ����ָ��GPUȡ����CPU
 /// </summary>
 /// <param name="ptr"></param>
 /// <param name="nodeName"></param>
@@ -406,7 +406,7 @@ ExceptionStatus copyFloatDeviceToHostByName(
 	END_WRAP_TRTAPI
 }
 
-// 修正后的C++优化版本 - 使用正确的ExceptionStatus返回值
+// �������C++�Ż��汾 - ʹ����ȷ��ExceptionStatus����ֵ
 ExceptionStatus WaitForInferenceCompletion(NvinferStruct* ptr, int timeoutMs = 1000)
 {
 	if (!ptr || !ptr->stream) {
@@ -418,43 +418,43 @@ ExceptionStatus WaitForInferenceCompletion(NvinferStruct* ptr, int timeoutMs = 1
 	while (true) {
 		cudaError_t streamStatus = cudaStreamQuery(ptr->stream);
 		if (streamStatus == cudaSuccess) {
-			std::cout << "[DEBUG] 推理完成确认" << std::endl;
+			std::cout << "[DEBUG] �������ȷ��" << std::endl;
 			return ExceptionStatus::NotOccurred;
 		}
 		else if (streamStatus != cudaErrorNotReady) {
-			std::cerr << "[ERROR] 流查询错误: " << cudaGetErrorString(streamStatus) << std::endl;
+			std::cerr << "[ERROR] ����ѯ����: " << cudaGetErrorString(streamStatus) << std::endl;
 			return ExceptionStatus::OccurredCuda;
 		}
 
-		// 检查超时
+		// ��鳬ʱ
 		auto current = std::chrono::high_resolution_clock::now();
 		auto elapsed = std::chrono::duration<double, std::milli>(current - start).count();
 		if (elapsed > timeoutMs) {
-			std::cout << "[WARNING] 等待推理完成超时: " << elapsed << "ms" << std::endl;
-			return ExceptionStatus::NotOccurred; // 超时但继续执行
+			std::cout << "[WARNING] �ȴ�������ɳ�ʱ: " << elapsed << "ms" << std::endl;
+			return ExceptionStatus::NotOccurred; // ��ʱ������ִ��
 		}
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(1));
 	}
 }
 
-// 获取最后的异常状态（供C#端调用）
+// ��ȡ�����쳣״̬����C#�˵��ã�
 ExceptionStatus GetLastExceptionStatus(NvinferStruct* ptr)
 {
-	// 检查CUDA错误
+	// ���CUDA����
 	cudaError_t cudaErr = cudaGetLastError();
 	if (cudaErr != cudaSuccess) {
-		std::cout << "[DEBUG] 检测到CUDA错误: " << cudaGetErrorString(cudaErr) << std::endl;
+		std::cout << "[DEBUG] ��⵽CUDA����: " << cudaGetErrorString(cudaErr) << std::endl;
 		return ExceptionStatus::OccurredCuda;
 	}
 
-	// 检查TensorRT状态（如果有相关API）
-	// 这里可以添加TensorRT特定的错误检查
+	// ���TensorRT״̬����������API��
+	// ����������TensorRT�ض��Ĵ�����
 
 	return ExceptionStatus::NotOccurred;
 }
 
-// 修正后的优化传输方法
+// ��������Ż����䷽��
 ExceptionStatus copyFloatDeviceToHostZeroCopy(
 	NvinferStruct* ptr,
 	const char* nodeName,
@@ -464,51 +464,51 @@ ExceptionStatus copyFloatDeviceToHostZeroCopy(
 	try {
 		auto start = std::chrono::high_resolution_clock::now();
 
-		// 1. 首先等待推理完成
-		std::cout << "[DEBUG] 开始等待推理完成..." << std::endl;
+		// 1. ���ȵȴ��������
+		std::cout << "[DEBUG] ��ʼ�ȴ��������..." << std::endl;
 		auto wait_start = std::chrono::high_resolution_clock::now();
 
 		ExceptionStatus waitResult = WaitForInferenceCompletion(ptr, 2000);
 		if (waitResult != ExceptionStatus::NotOccurred) {
-			std::cout << "[ERROR] 等待推理完成失败，状态码: " << static_cast<int>(waitResult) << std::endl;
+			std::cout << "[ERROR] �ȴ��������ʧ�ܣ�״̬��: " << static_cast<int>(waitResult) << std::endl;
 			return waitResult;
 		}
 
 		auto after_wait = std::chrono::high_resolution_clock::now();
 		auto wait_time = std::chrono::duration<double, std::milli>(after_wait - wait_start).count();
-		std::cout << "[DEBUG] 推理完成等待耗时: " << wait_time << "ms" << std::endl;
+		std::cout << "[DEBUG] ������ɵȴ���ʱ: " << wait_time << "ms" << std::endl;
 
-		// 2. 获取节点索引
+		// 2. ��ȡ�ڵ�����
 		int nodeIndex = ptr->engine->getBindingIndex(nodeName);
 		if (nodeIndex < 0) {
-			std::cerr << "[ERROR] 无效节点名: " << nodeName << std::endl;
+			std::cerr << "[ERROR] ��Ч�ڵ���: " << nodeName << std::endl;
 			return ExceptionStatus::OccurredTRT;
 		}
 
 		size_t byteSize = elementCount * sizeof(float);
 
-		// 3. 分配固定内存
+		// 3. ����̶��ڴ�
 		void* pinnedMem = nullptr;
 		cudaError_t err = cudaHostAlloc(&pinnedMem, byteSize, cudaHostAllocMapped);
 		if (err != cudaSuccess) {
-			std::cerr << "[ERROR] cudaHostAlloc失败: " << cudaGetErrorString(err) << std::endl;
+			std::cerr << "[ERROR] cudaHostAllocʧ��: " << cudaGetErrorString(err) << std::endl;
 			return ExceptionStatus::OccurredCuda;
 		}
 
-		// 4. 执行快速数据传输
+		// 4. ִ�п������ݴ���
 		auto copy_start = std::chrono::high_resolution_clock::now();
 
 		err = cudaMemcpyAsync(pinnedMem, ptr->dataBuffer[nodeIndex], byteSize,
 			cudaMemcpyDeviceToHost, ptr->stream);
 		if (err != cudaSuccess) {
-			std::cerr << "[ERROR] cudaMemcpyAsync失败: " << cudaGetErrorString(err) << std::endl;
+			std::cerr << "[ERROR] cudaMemcpyAsyncʧ��: " << cudaGetErrorString(err) << std::endl;
 			cudaFreeHost(pinnedMem);
 			return ExceptionStatus::OccurredCuda;
 		}
 
 		err = cudaStreamSynchronize(ptr->stream);
 		if (err != cudaSuccess) {
-			std::cerr << "[ERROR] cudaStreamSynchronize失败: " << cudaGetErrorString(err) << std::endl;
+			std::cerr << "[ERROR] cudaStreamSynchronizeʧ��: " << cudaGetErrorString(err) << std::endl;
 			cudaFreeHost(pinnedMem);
 			return ExceptionStatus::OccurredCuda;
 		}
@@ -519,36 +519,36 @@ ExceptionStatus copyFloatDeviceToHostZeroCopy(
 
 		*hostData = static_cast<float*>(pinnedMem);
 
-		std::cout << "[DEBUG] 优化后传输分析: "
-			<< "推理等待=" << wait_time << "ms, "
-			<< "纯传输=" << copy_time << "ms, "
-			<< "总耗时=" << total_time << "ms" << std::endl;
+		std::cout << "[DEBUG] �Ż��������: "
+			<< "����ȴ�=" << wait_time << "ms, "
+			<< "������=" << copy_time << "ms, "
+			<< "�ܺ�ʱ=" << total_time << "ms" << std::endl;
 
-		// 计算纯传输速度
+		// ���㴿�����ٶ�
 		double pureTransferSpeedMBps = (byteSize / 1024.0 / 1024.0) / (copy_time / 1000.0);
-		std::cout << "[DEBUG] 纯传输速度: " << pureTransferSpeedMBps << "MB/s" << std::endl;
+		std::cout << "[DEBUG] �������ٶ�: " << pureTransferSpeedMBps << "MB/s" << std::endl;
 
-		// 性能评估
+		// ��������
 		if (wait_time > total_time * 0.8) {
-			std::cout << "[ANALYSIS] 主要耗时在推理等待(" << wait_time << "ms)，建议使用异步模式" << std::endl;
+			std::cout << "[ANALYSIS] ��Ҫ��ʱ������ȴ�(" << wait_time << "ms)������ʹ���첽ģʽ" << std::endl;
 		}
 		if (copy_time > 20) {
-			std::cout << "[ANALYSIS] 纯传输时间较长(" << copy_time << "ms)，可能存在PCIe瓶颈" << std::endl;
+			std::cout << "[ANALYSIS] ������ʱ��ϳ�(" << copy_time << "ms)�����ܴ���PCIeƿ��" << std::endl;
 		}
 
 		return ExceptionStatus::NotOccurred;
 	}
 	catch (const std::exception& e) {
-		std::cerr << "[EXCEPTION] C++异常: " << e.what() << std::endl;
+		std::cerr << "[EXCEPTION] C++�쳣: " << e.what() << std::endl;
 		return ExceptionStatus::Occurred;
 	}
 	catch (...) {
-		std::cerr << "[EXCEPTION] 未知C++异常" << std::endl;
+		std::cerr << "[EXCEPTION] δ֪C++�쳣" << std::endl;
 		return ExceptionStatus::Occurred;
 	}
 }
 
-// 检查推理是否完成的简单版本（供C#调用）
+// ��������Ƿ���ɵļ򵥰汾����C#���ã�
 bool IsInferenceComplete(NvinferStruct* ptr)
 {
 	if (!ptr || !ptr->stream) {
@@ -558,12 +558,12 @@ bool IsInferenceComplete(NvinferStruct* ptr)
 	cudaError_t streamStatus = cudaStreamQuery(ptr->stream);
 	bool isComplete = (streamStatus == cudaSuccess);
 
-	std::cout << "[DEBUG] 推理状态查询: " << (isComplete ? "完成" : "进行中") << std::endl;
+	std::cout << "[DEBUG] ����״̬��ѯ: " << (isComplete ? "���" : "������") << std::endl;
 	return isComplete;
 }
 
 
-// 回调函数签名
+// �ص�����ǩ��
 typedef void(*CopyCompleteCallback)(void* hostData, void* userData, double elapsedMs);
 
 ExceptionStatus copyFloatDeviceToHostAsync(
@@ -584,8 +584,8 @@ ExceptionStatus copyFloatDeviceToHostAsync(
 			return ExceptionStatus::OccurredTRT;
 		}
 		size_t byteSize = elementCount * sizeof(float);
-		std::cout << "[DEBUG-ASYNC] 节点索引: " << nodeIndex
-			<< ", 数据大小: " << (byteSize / 1024) << "KB" << std::endl;
+		std::cout << "[DEBUG-ASYNC] �ڵ�����: " << nodeIndex
+			<< ", ���ݴ�С: " << (byteSize / 1024) << "KB" << std::endl;
 		struct BufferPair { void* hostBuf[2] = { nullptr, nullptr }; int index = 0; };
 		static std::unordered_map<size_t, BufferPair> g_doubleBufferPool;
 		static std::mutex g_mutex;
@@ -598,7 +598,7 @@ ExceptionStatus copyFloatDeviceToHostAsync(
 			std::lock_guard<std::mutex> lock(g_mutex);
 			auto it = g_doubleBufferPool.find(byteSize);
 			if (it == g_doubleBufferPool.end()) {
-				std::cout << "[DEBUG-ASYNC] 创建新的双缓冲对，大小: " << (byteSize / 1024) << "KB" << std::endl;
+				std::cout << "[DEBUG-ASYNC] �����µ�˫����ԣ���С: " << (byteSize / 1024) << "KB" << std::endl;
 				BufferPair pair;
 
 				auto allocStart = std::chrono::high_resolution_clock::now();
@@ -612,12 +612,12 @@ ExceptionStatus copyFloatDeviceToHostAsync(
 				totalBufferAllocated += byteSize * 2;
 
 				auto allocTime = std::chrono::duration<double, std::milli>(allocEnd - allocStart).count();
-				std::cout << "[DEBUG-ASYNC] 双缓冲分配完成，耗时: " << allocTime << "ms, "
-					<< "池中总缓冲: " << g_doubleBufferPool.size() << "个, "
-					<< "总内存: " << (totalBufferAllocated / 1024 / 1024) << "MB" << std::endl;
+				std::cout << "[DEBUG-ASYNC] ˫���������ɣ���ʱ: " << allocTime << "ms, "
+					<< "�����ܻ���: " << g_doubleBufferPool.size() << "��, "
+					<< "���ڴ�: " << (totalBufferAllocated / 1024 / 1024) << "MB" << std::endl;
 			}
 			else {
-				std::cout << "[DEBUG-ASYNC] 复用现有双缓冲对" << std::endl;
+				std::cout << "[DEBUG-ASYNC] ��������˫�����" << std::endl;
 			}
 			buffers = &it->second;
 		}
@@ -625,19 +625,19 @@ ExceptionStatus copyFloatDeviceToHostAsync(
 		auto poolEnd = std::chrono::high_resolution_clock::now();
 		auto poolTime = std::chrono::duration<double, std::milli>(poolEnd - poolStart).count();
 		cudaError_t streamStatus = cudaStreamQuery(ptr->stream);
-		std::cout << "[DEBUG-ASYNC] GPU流状态: " <<
-			(streamStatus == cudaSuccess ? "空闲" :
-				streamStatus == cudaErrorNotReady ? "忙碌" :
+		std::cout << "[DEBUG-ASYNC] GPU��״̬: " <<
+			(streamStatus == cudaSuccess ? "����" :
+				streamStatus == cudaErrorNotReady ? "æµ" :
 				cudaGetErrorString(streamStatus)) << std::endl;
 
 		void* devicePtr = ptr->dataBuffer[nodeIndex];
 		int writeIndex = buffers->index;
 
-		std::cout << "[DEBUG-ASYNC] 使用缓冲区索引: " << writeIndex
-			<< ", 设备指针: " << devicePtr
-			<< ", 主机缓冲: " << buffers->hostBuf[writeIndex] << std::endl;
+		std::cout << "[DEBUG-ASYNC] ʹ�û���������: " << writeIndex
+			<< ", �豸ָ��: " << devicePtr
+			<< ", ��������: " << buffers->hostBuf[writeIndex] << std::endl;
 		auto copyStart = std::chrono::high_resolution_clock::now();
-		std::cout << "[DEBUG-ASYNC] 开始异步内存拷贝..." << std::endl;
+		std::cout << "[DEBUG-ASYNC] ��ʼ�첽�ڴ濽��..." << std::endl;
 
 		CHECKCUDA(cudaMemcpyAsync(
 			buffers->hostBuf[writeIndex],
@@ -648,9 +648,9 @@ ExceptionStatus copyFloatDeviceToHostAsync(
 
 		auto copyLaunch = std::chrono::high_resolution_clock::now();
 		auto copyLaunchTime = std::chrono::duration<double, std::milli>(copyLaunch - copyStart).count();
-		std::cout << "[DEBUG-ASYNC] 异步拷贝启动完成，耗时: " << copyLaunchTime << "ms" << std::endl;
+		std::cout << "[DEBUG-ASYNC] �첽���������ɣ���ʱ: " << copyLaunchTime << "ms" << std::endl;
 
-		// 5. 设置异步回调
+		// 5. �����첽�ص�
 		struct CallbackData {
 			CopyCompleteCallback cb;
 			void* buf;
@@ -671,7 +671,7 @@ ExceptionStatus copyFloatDeviceToHostAsync(
 			writeIndex
 		};
 
-		std::cout << "[DEBUG-ASYNC] 设置异步回调..." << std::endl;
+		std::cout << "[DEBUG-ASYNC] �����첽�ص�..." << std::endl;
 
 		CHECKCUDA(cudaLaunchHostFunc(ptr->stream, [](void* userData) {
 			auto* d = reinterpret_cast<CallbackData*>(userData);
@@ -680,7 +680,7 @@ ExceptionStatus copyFloatDeviceToHostAsync(
 			auto copyElapsed = std::chrono::duration<double, std::milli>(endTime - d->startTime).count();
 			auto totalElapsed = std::chrono::duration<double, std::milli>(endTime - d->funcStartTime).count();
 
-			// 计算传输速度
+			// ���㴫���ٶ�
 			double transferSpeedMBps = (d->byteSize / 1024.0 / 1024.0) / (copyElapsed / 1000.0);
 
 			std::cout << "[DEBUG-ASYNC-CALLBACK] 异步传输完成！" << std::endl;
@@ -714,14 +714,14 @@ ExceptionStatus copyFloatDeviceToHostAsync(
 		return ExceptionStatus::NotOccurred;
 	}
 	catch (const std::exception& e) {
-		std::cerr << "[EXCEPTION-ASYNC] C++异常: " << e.what() << std::endl;
+		std::cerr << "[EXCEPTION-ASYNC] C++�쳣: " << e.what() << std::endl;
 		return ExceptionStatus::Occurred;
 	}
 	END_WRAP_TRTAPI
 }
 
 
-// 清理主机到设备的内存池
+// �����������豸���ڴ��
 void cleanupHostToDevicePinnedMemoryPool()
 {
 	std::lock_guard<std::mutex> lock(g_hostToDeviceMemoryPoolMutex);
@@ -731,7 +731,7 @@ void cleanupHostToDevicePinnedMemoryPool()
 	g_hostToDevicePinnedMemoryPool.clear();
 }
 
-// 清理设备到主机的内存池
+// �����豸���������ڴ��
 void cleanupDeviceToHostPinnedMemoryPool()
 {
 	std::lock_guard<std::mutex> lock(g_deviceToHostMemoryPoolMutex);
@@ -741,7 +741,7 @@ void cleanupDeviceToHostPinnedMemoryPool()
 	g_deviceToHostPinnedMemoryPool.clear();
 }
 
-// 清理所有的内存池
+// �������е��ڴ��
 void cleanupAllPinnedMemoryPools()
 {
 	cleanupHostToDevicePinnedMemoryPool();
@@ -751,7 +751,7 @@ void cleanupAllPinnedMemoryPools()
 ExceptionStatus copyFloatDeviceToHostByIndex(NvinferStruct* ptr, int nodeIndex, float* data)
 {
 	BEGIN_WRAP_TRTAPI
-	// 获取输入节点未读信息
+	// ��ȡ����ڵ�δ����Ϣ
 	CHECKTRT(nvinfer1::Dims dims = ptr->context->getBindingDimensions(nodeIndex));
 	std::vector<int> shape(dims.d, dims.d + dims.nbDims);
 	size_t size = std::accumulate(shape.begin(), shape.end(), 1, std::multiplies<int>());
@@ -783,7 +783,7 @@ ExceptionStatus getBindingDimensionsByName(NvinferStruct* ptr, const char* nodeN
 {
 	BEGIN_WRAP_TRTAPI
 	CHECKTRT(int nodeIndex = ptr->engine->getBindingIndex(nodeName));
-	// 获取输入节点未读信息
+	// ��ȡ����ڵ�δ����Ϣ
 	CHECKTRT(nvinfer1::Dims shape_d = ptr->context->getBindingDimensions(nodeIndex));
 	*dimLength = shape_d.nbDims;
 	for (int i = 0; i < *dimLength; ++i)
@@ -796,7 +796,7 @@ ExceptionStatus getBindingDimensionsByName(NvinferStruct* ptr, const char* nodeN
 ExceptionStatus getBindingDimensionsByIndex(NvinferStruct* ptr, int nodeIndex, int* dimLength, int* dims)
 {
 	BEGIN_WRAP_TRTAPI
-	// 获取输入节点未读信息
+	// ��ȡ����ڵ�δ����Ϣ
 	CHECKTRT(nvinfer1::Dims shape_d = ptr->context->getBindingDimensions(nodeIndex));
 	*dimLength = shape_d.nbDims;
 	for (int i = 0; i < *dimLength; ++i)

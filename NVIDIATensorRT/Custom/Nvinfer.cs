@@ -238,7 +238,7 @@ namespace NVIDIATensorRT.Custom
                     (UIntPtr)output.MagnitudeTensor));
             }
             return result;
-        }
+            }
 
         public unsafe IntPtr GetZeroCopyResult(ref OutputTensor output, string nodeName)
         {
